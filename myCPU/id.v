@@ -13,7 +13,8 @@ module id_stage(
     input   wire        EX_to_ID_load_up,
     input  wire [`MEM_BYPASS_LEN-1:0] MEM_to_ID_forward,
     input  wire [`EX_BYPASS_LEN-1:0] EX_to_ID_forward,
-    input  wire [`WB_BYPASS_LEN-1:0] WB_to_ID_forward
+    input  wire [`WB_BYPASS_LEN-1:0] WB_to_ID_forward,
+	input  wire has_int
 );
 
 wire        br_taken;
@@ -102,11 +103,17 @@ wire        inst_ld_bu;  //task_11
 wire        inst_ld_hu;  //task_11
 wire        inst_st_b;   //task_11
 wire        inst_st_h;   //task_11
+//task12
 wire inst_csrrd;
 wire inst_csrwr;
 wire inst_csrxchg;
 wire inst_ertn;
 wire inst_syscall;
+//task13
+wire inst_break;
+wire inst_rdcntvl_w;
+wire inst_rdcntvh_w;
+wire inst_rdcntid;
 
 wire        need_ui5;
 wire 		need_ui12;
@@ -231,7 +238,11 @@ assign inst_csrwr   = op_31_26_d[6'h01] & ~(|op_25_22[3:2]) & (rj == 5'b1);
 assign inst_csrxchg = op_31_26_d[6'h01] & ~(|op_25_22[3:2]) & (|rj[4:1]);
 assign inst_syscall  = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h2] & op_19_15_d[5'h16];
 assign inst_ertn    = op_31_26_d[6'h01] & op_25_22_d[4'h9] & op_21_20_d[2'h0] & op_19_15_d[5'h10] & (rk == 5'h0e) & ~(|rj) & ~(|rd);
-
+//task_13 add the following instructions
+assign inst_break = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h2] & op_19_15_d[5'h14];
+assign inst_rdcntvl_w   = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h0] & op_19_15_d[5'h00] & (rk ==5'h18) & ~(|rj);
+assign inst_rdcntvh_w   = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h0] & op_19_15_d[5'h00] & (rk ==5'h19) & ~(|rj);
+assign inst_rdcntid     = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h0] & op_19_15_d[5'h00] & (rk ==5'h18) & ~(|rd);
 
 assign alu_op[ 0] = inst_add_w | inst_addi_w | inst_ld_w | inst_st_w | inst_st_b | inst_st_h
                     | inst_jirl | inst_bl |inst_pcaddu12i | inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_st_b | inst_st_h; 
@@ -319,9 +330,12 @@ assign res_from_mem  = inst_ld_w |
 assign dst_is_r1     = inst_bl;
 //是否写寄存器
 assign gr_we         = ~inst_st_w & ~inst_st_b & ~inst_st_h & ~inst_beq & ~inst_bne & ~inst_b & ~inst_blt 
-					& ~inst_bge & ~inst_bltu & ~inst_bgeu & ~inst_syscall & ~inst_ertn;
+					& ~inst_bge & ~inst_bltu & ~inst_bgeu & ~inst_syscall & ~inst_ertn & ~inst_break; 
+//是store指令
 assign mem_we        = inst_st_w | inst_st_b | inst_st_h;
-assign dest          = dst_is_r1 ? 5'd1 : rd;
+assign dest          = dst_is_r1 ? 5'd1 :
+					inst_rdcntid?rj :
+						rd;
 
 assign rf_raddr1 = rj;
 assign rf_raddr2 = src_reg_is_rd ? rd :rk;
@@ -380,13 +394,14 @@ assign alu_src2 = src2_is_imm ? imm : rkd_value;
 //CSR interface
 wire [`EXC_WIDTH-1:0]exc_last;
 wire [`EXC_WIDTH-1:0]exc_now;
-wire [13:0] csr_num = ID_inst[23:10];
+wire [13:0] csr_num = inst_rdcntid ? `CSR_TID :ID_inst[23:10];
 wire csr_we = inst_csrwr | inst_csrxchg;
-wire csr_re = inst_csrrd | inst_csrxchg | inst_csrwr;
+wire csr_re = inst_csrrd | inst_csrxchg | inst_csrwr | inst_rdcntid;
 wire [31:0] csr_wvalue = rkd_value;
 wire [31:0] csr_wmask = inst_csrxchg ? rj_value : 32'hFFFFFFFF;
-wire res_from_csr = inst_csrrd | inst_csrwr | inst_csrxchg;//没有ertn，因为其会flush
+wire res_from_csr = inst_csrrd | inst_csrwr | inst_csrxchg | inst_rdcntid;//没有ertn，因为其会flush
 wire is_sys = inst_syscall;
+wire is_break = inst_break;
 wire ertn_flush = inst_ertn;
 
 wire [79:0]csr_access = {csr_num, csr_re, csr_we, csr_wvalue, csr_wmask};
@@ -400,9 +415,33 @@ assign {exc_last,
 		ID_inst,
         ID_pc  } = IF_to_ID_bus_reg;
 
+// 以后新增指令，只需在这里加上即可
+wire inst_valid = inst_add_w   | inst_sub_w   | inst_slt    | inst_sltu  |
+                  inst_nor     | inst_and     | inst_or     | inst_xor   |
+                  inst_slli_w  | inst_srli_w  | inst_srai_w | inst_addi_w|
+                  inst_ld_w    | inst_st_w    | inst_jirl   | inst_b     |
+                  inst_bl      | inst_beq     | inst_bne    | inst_lu12i_w |
+                  inst_slti    | inst_sltui   | inst_andi   | inst_ori   |
+                  inst_xori    | inst_sll     | inst_srl    | inst_sra   |
+                  inst_pcaddu12i | inst_mul_w | inst_mulh_w | inst_mulh_wu |
+                  inst_div_w   | inst_mod_w   | inst_div_wu | inst_mod_wu |
+                  inst_blt     | inst_bge     | inst_bltu   | inst_bgeu  |
+                  inst_ld_b    | inst_ld_h    | inst_ld_bu  | inst_ld_hu  |
+                  inst_st_b    | inst_st_h    | inst_csrrd  | inst_csrwr |
+                  inst_csrxchg | inst_ertn    | inst_syscall | inst_break |
+                  inst_rdcntvl_w | inst_rdcntvh_w | inst_rdcntid;
+wire exc_ine;
+assign exc_ine = ~inst_valid;
+wire [15:0] ID_exc_detected = { {(`EXC_WIDTH-`EXC_SYS-1){1'b0}}, is_sys, {`EXC_SYS{1'b0}} }
+                            | { {(`EXC_WIDTH-`EXC_BRK-1){1'b0}}, is_break, {`EXC_BRK{1'b0}} }
+                            | { {(`EXC_WIDTH-`EXC_INE-1){1'b0}}, exc_ine, {`EXC_INE{1'b0}} };
+assign exc_now = has_int? { {(`EXC_WIDTH-`EXC_INT-1){1'b0}}, has_int, {`EXC_INT{1'b0}} } & {`EXC_WIDTH{ID_valid}}:
+				(|exc_last) ? exc_last : ID_exc_detected;
 
-
-assign exc_now = exc_last |{ {(`EXC_WIDTH-`EXC_SYS-1){1'b0}}, is_sys, {`EXC_SYS{1'b0}} };
+// assign exc_now = exc_last 	|{ {(`EXC_WIDTH-`EXC_INT-1){1'b0}}, has_int, {`EXC_INT{1'b0}} } & {`EXC_WIDTH{ID_valid}}
+// 							|{ {(`EXC_WIDTH-`EXC_SYS-1){1'b0}}, is_sys, {`EXC_SYS{1'b0}} }
+// 							| { {(`EXC_WIDTH-`EXC_BRK-1){1'b0}}, is_break, {`EXC_BRK{1'b0}} }
+// 							| { {(`EXC_WIDTH-`EXC_INE-1){1'b0}}, exc_ine, {`EXC_INE{1'b0}} };
 
 //WB->ID，写回阶段传回的寄存器堆写使能，写地址，写数据
 assign {rf_we   ,  
@@ -431,8 +470,10 @@ assign ID_to_EX_bus = {alu_op       ,
 					   exc_now,
 					   csr_access,
 					   ertn_flush,
-					   res_from_csr
-                    };
+					   res_from_csr,
+					   inst_rdcntvl_w,
+					   inst_rdcntvh_w
+	};
 
 assign {EX_to_ID_we,
         EX_to_ID_dest,
@@ -459,7 +500,7 @@ assign ID_to_EX_valid = ID_valid && ID_ready_go;
 
                 
 
-assign no_rj    = inst_b | inst_bl | inst_lu12i_w | inst_pcaddu12i | inst_csrrd |inst_csrwr|inst_syscall|inst_ertn;
+assign no_rj    = inst_b | inst_bl | inst_lu12i_w | inst_pcaddu12i | inst_csrrd |inst_csrwr|inst_syscall|inst_ertn|inst_break|inst_rdcntid|inst_rdcntvh_w|inst_rdcntvl_w;
 assign no_rk    = inst_slli_w | inst_srli_w | inst_srai_w | inst_addi_w | inst_ld_w | inst_st_w |inst_st_b | inst_st_h | inst_jirl | 
                 inst_b | inst_bl | inst_beq | inst_bne | inst_lu12i_w| 
 				inst_slti | inst_sltui
@@ -467,7 +508,8 @@ assign no_rk    = inst_slli_w | inst_srli_w | inst_srai_w | inst_addi_w | inst_l
                 | inst_pcaddu12i
                 | inst_blt | inst_bge | inst_bltu | inst_bgeu
                 | inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu
-				|inst_csrrd |inst_csrwr|inst_csrxchg|inst_syscall|inst_ertn;
+				|inst_csrrd |inst_csrwr|inst_csrxchg|inst_syscall|inst_ertn
+				|inst_break|inst_rdcntid|inst_rdcntvh_w|inst_rdcntvl_w;
 assign no_rd    = ~inst_st_w & ~inst_beq & ~inst_bne & ~inst_blt & ~inst_bge & ~inst_bltu & ~inst_bgeu & ~inst_csrwr & ~inst_csrxchg;//不使用rd作为源操作数
 
 assign rj_wait = ~no_rj && (rj != 5'b00000) && ((rj == EX_to_ID_dest) || (rj == MEM_to_ID_dest) || (rj == WB_to_ID_dest));

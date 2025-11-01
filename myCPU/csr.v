@@ -1,4 +1,3 @@
-`include "csr.vh"
 `include "defines.vh"
 module csr(
 input wire clk,
@@ -86,6 +85,7 @@ reg [29:0]csr_tcfg_initval;
 //TVAL
 wire [31:0] tcfg_next_value;
 wire [31:0] csr_tval;
+
 reg [31:0] timer_cnt;
 //TICLR
 wire csr_ticlr_clr;
@@ -212,7 +212,7 @@ end
 //TID
 always @(posedge clk) begin
 	if (reset)
-		csr_tid_tid <= coreid_in;
+		csr_tid_tid <= 32'b0;
 	else if (csr_we && csr_num==`CSR_TID)
 		csr_tid_tid <= csr_wmask[`CSR_TID_TID]&csr_wvalue[`CSR_TID_TID]
 		| ~csr_wmask[`CSR_TID_TID]&csr_tid_tid;
@@ -255,7 +255,6 @@ assign has_int = ((csr_estat_is[12:0] & csr_ecfg_lie[12:0]) != 13'b0) && (csr_cr
 
 wire [31:0] csr_crmd_rvalue = {23'b0,csr_crmd_datm,csr_crmd_datf,csr_crmd_pg,csr_crmd_da,csr_crmd_ie,csr_crmd_plv};
 wire [31:0] csr_prmd_rvalue = {29'b0, csr_prmd_pie, csr_prmd_pplv};
-wire [31:0] csr_ecfg_rvalue = {19'b0, csr_ecfg_lie};
 wire [31:0] csr_estat_rvalue = {1'b0,csr_estat_esubcode,csr_estat_ecode,3'b0,csr_estat_is[12:11],1'b0,csr_estat_is[9:0]};
 wire [31:0] csr_era_rvalue = {csr_era_pc};
 wire [31:0] csr_eentry_rvalue = {csr_eentry_va,6'b0};
@@ -263,17 +262,28 @@ wire [31:0] csr_save0_rvalue = {csr_save0_data};
 wire [31:0] csr_save1_rvalue = {csr_save1_data};
 wire [31:0] csr_save2_rvalue = {csr_save2_data};
 wire [31:0] csr_save3_rvalue = {csr_save3_data};
-
+wire [31:0] csr_ecfg_rvalue = {18'b0, csr_ecfg_lie};
+wire [31:0] csr_badv_rvalue = {csr_badv_vaddr};
+wire [31:0] csr_tid_rvalue = {csr_tid_tid};
+wire [31:0] csr_tcfg_rvalue = {csr_tcfg_initval, csr_tcfg_periodic, csr_tcfg_en};
+wire [31:0] csr_tval_rvalue = {csr_tval};
+wire [31:0] csr_ticlr_rvalue = {31'b0, csr_ticlr_clr};
 
 assign csr_rvalue = {32{csr_num==`CSR_CRMD}} & csr_crmd_rvalue
-			| {32{csr_num==`CSR_PRMD}} & csr_prmd_rvalue
-			| {32{csr_num==`CSR_ESTAT}} & csr_estat_rvalue
-			| {32{csr_num == `CSR_ERA}} & csr_era_rvalue
-			| {32{csr_num == `CSR_EENTRY}} & csr_eentry_rvalue
-			| {32{csr_num == `CSR_SAVE0}} & csr_save0_rvalue
-			| {32{csr_num == `CSR_SAVE1}} & csr_save1_rvalue
-			| {32{csr_num == `CSR_SAVE2}} & csr_save2_rvalue
-			| {32{csr_num == `CSR_SAVE3}} & csr_save3_rvalue;
+					| {32{csr_num==`CSR_PRMD}} & csr_prmd_rvalue
+					| {32{csr_num==`CSR_ESTAT}} & csr_estat_rvalue
+					| {32{csr_num == `CSR_ERA}} & csr_era_rvalue
+					| {32{csr_num == `CSR_EENTRY}} & csr_eentry_rvalue
+					| {32{csr_num == `CSR_SAVE0}} & csr_save0_rvalue
+					| {32{csr_num == `CSR_SAVE1}} & csr_save1_rvalue
+					| {32{csr_num == `CSR_SAVE2}} & csr_save2_rvalue
+					| {32{csr_num == `CSR_SAVE3}} & csr_save3_rvalue
+					| {32{csr_num == `CSR_ECFG}} & csr_ecfg_rvalue
+					| {32{csr_num == `CSR_BADV}} & csr_badv_rvalue
+					| {32{csr_num == `CSR_TID}} & csr_tid_rvalue
+					| {32{csr_num == `CSR_TCFG}} & csr_tcfg_rvalue
+					| {32{csr_num == `CSR_TVAL}} & csr_tval_rvalue
+					| {32{csr_num == `CSR_TICLR}} & csr_ticlr_rvalue;
 
 
 endmodule

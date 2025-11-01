@@ -18,7 +18,8 @@ module if_stage(
 	input wire ertn_flush,
 	input wire [31:0]era_pc
 );
-
+wire         br_taken;
+wire [ 31:0] br_target;
 reg         IF_valid;
 wire        IF_ready_go;
 wire        IF_allow;
@@ -27,10 +28,19 @@ wire [31:0] seq_pc;
 wire [31:0] nextpc;
 wire [`EXC_WIDTH-1:0]exc_last;
 wire [`EXC_WIDTH-1:0]exc_now;
+
+
+reg exc_adef;
+
+always @(posedge clk) begin
+    if (reset)
+        exc_adef <= 1'b0;
+    else
+        exc_adef <= (nextpc[1:0] != 2'b00);
+end
 assign exc_last = 16'b0;
-assign exc_now = exc_last;
-wire         br_taken;
-wire [ 31:0] br_target;
+assign exc_now = exc_last | { {(`EXC_WIDTH-`EXC_ADEF-1){1'b0}}, exc_adef, {`EXC_ADEF{1'b0}} };
+
 assign {br_taken, br_target} = ID_to_IF_bus;
 
 wire [31:0] IF_inst;

@@ -55,7 +55,16 @@ wire has_int;
 wire [7:0]hw_int_in = 8'b0;
 wire [31:0]coreid_in = 32'b0;
 
-
+//task13 - counter
+reg [63:0]stable_counter;
+always @(posedge clk ) 
+begin
+	if (reset)
+		stable_counter <= 64'b0;
+	else 
+		stable_counter <= stable_counter + 1'b1;
+end
+wire [63:0]glob_cnt = stable_counter ;
 csr my_csr(
 	.clk(clk),
 	.reset(reset),
@@ -103,7 +112,8 @@ id_stage id_stage(
     .ID_to_EX_bus   (ID_to_EX_bus),
     .ID_to_IF_bus   (ID_to_IF_bus),
     .WB_to_ID_bus   (WB_to_ID_bus),
-    .EX_to_ID_load_up(EX_to_ID_load_up)
+    .EX_to_ID_load_up(EX_to_ID_load_up),
+	.has_int(has_int)
 );
 // EX stage
 ex_stage ex_stage(
@@ -119,6 +129,7 @@ ex_stage ex_stage(
     .EX_to_ID_load_up(EX_to_ID_load_up),
 	.has_exc(has_exc),
 	.has_ertn(MEM_ertn_flush||ertn_flush),
+	.glob_cnt(glob_cnt),
     // data sram interface
     .data_sram_en   (data_sram_en),
     .data_sram_we   (data_sram_we),

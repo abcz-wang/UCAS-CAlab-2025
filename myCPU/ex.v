@@ -16,7 +16,8 @@ module ex_stage(
     output wire [31:0] data_sram_wdata,
     output wire [`EX_BYPASS_LEN-1:0] EX_to_ID_forward,
 	input wire has_exc,//MEM,WB级有异常指令，不写入mem
-	input wire has_ertn //MEM,WB级是ertn,也不能写入mem,因为要清空流水
+	input wire has_ertn, //MEM,WB级是ertn,也不能写入mem,因为要清空流水
+	input wire [63:0]glob_cnt 
 );
 
 reg         EX_valid      ;
@@ -55,6 +56,9 @@ wire [`EXC_WIDTH-1:0]EX_exc_now;
 wire [79:0]EX_csr_access;
 wire EX_ertn_flush;
 wire EX_res_from_csr;
+wire EX_is_rdcntvl_w;
+wire EX_is_rdcntvh_w;
+wire EX_is_rdcntid;
 
 assign {EX_alu_op,
         EX_alu_src1,
@@ -77,11 +81,28 @@ assign {EX_alu_op,
 		EX_exc_last,
 		EX_csr_access,
 		EX_ertn_flush,
-		EX_res_from_csr
+		EX_res_from_csr,
+		EX_is_rdcntvl_w,
+		EX_is_rdcntvh_w
 } = ID_to_EX_bus_reg;
+wire is_rdcntv = EX_is_rdcntvl_w | EX_is_rdcntvh_w;
+wire [31:0]rdcnv_result = {32{EX_is_rdcntvl_w}} & glob_cnt[31:0] |
+                    {32{EX_is_rdcntvh_w}} & glob_cnt[63:32]; ;
+//可扩展
+wire EX_is_ld_w = EX_res_from_mem && 
+                ~(EX_is_ld_b | EX_is_ld_h | EX_is_ld_bu | EX_is_ld_hu);
 
+wire EX_is_st_w = EX_mem_we && 
+                ~(EX_is_st_b | EX_is_st_h);
 
-assign EX_to_MEM_bus = {EX_res_from_mem,  
+wire exc_ale =
+    (EX_is_ld_h  || EX_is_ld_hu || EX_is_st_h)  ? (ex_final_result[0] != 1'b0) :
+    (EX_is_ld_w  || EX_is_st_w )                ? (|ex_final_result[1:0]) :
+    1'b0;
+
+//ALE发生时，BADV记录出错地址，故res_from_mem置为0,防止覆盖其值
+wire res_from_mem = EX_res_from_mem & !exc_ale;
+assign EX_to_MEM_bus = {res_from_mem,  
                        EX_gr_we       ,  
                        EX_dest        ,  
                        ex_final_result,  
@@ -101,7 +122,8 @@ assign EX_to_ID_forward = {EX_gr_we,
 						 EX_res_from_csr
                         };
 
-assign EX_exc_now = EX_exc_last;
+assign EX_exc_now = |EX_exc_last ?  EX_exc_last:
+					{ {(`EXC_WIDTH-`EXC_ALE-1){1'b0}}, exc_ale, {`EXC_ALE{1'b0}} };
 
 assign EX_ready_go    = (is_div & EX_valid) ? div_done : 1'b1;
 
@@ -122,7 +144,7 @@ always @(posedge clk) begin
     end
 end
 
-assign  EX_to_ID_load_up = EX_valid & EX_res_from_mem;
+assign  EX_to_ID_load_up = EX_valid & EX_res_from_mem & !exc_ale;
 alu u_alu(
     .alu_op     (EX_alu_op    ),
     .alu_src1   (EX_alu_src1  ),
@@ -142,9 +164,10 @@ divider my_divider(
 	.div_done(div_done)
 );
 assign is_div = (EX_is_div_mod_s | EX_is_div_mod_u) & EX_valid;
-assign ex_final_result = is_div ? div_result : alu_result;
+assign ex_final_result = is_div ? div_result :
+							is_rdcntv ? rdcnv_result:
+							alu_result;
 assign EX_to_ID_dest = EX_dest & {5{EX_valid}};
-//assign data_sram_we    = {4{EX_mem_we && EX_valid}};
 
 assign write_strb  =    EX_is_st_b ? 
                             (ex_final_result[1:0] == 2'b00) ? 4'b0001 :
@@ -156,7 +179,7 @@ assign write_strb  =    EX_is_st_b ?
                             4'b1100 :
                         4'b1111;
 wire EX_has_exc = has_exc | (|EX_exc_now);
-assign data_sram_en    = (EX_mem_we | EX_res_from_mem) & EX_valid & ~has_ertn;
+assign data_sram_en    = (EX_mem_we | EX_res_from_mem) & EX_valid & ~has_ertn & ~exc_ale;
 assign data_sram_we    = {4{EX_mem_we && EX_valid && ~EX_has_exc}} & write_strb;
 assign data_sram_addr  = {ex_final_result[31:2], 2'b00};
 assign data_sram_wdata = EX_is_st_b ? {4{EX_rkd_value[7:0]}} :

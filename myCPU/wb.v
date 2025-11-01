@@ -1,5 +1,4 @@
 `include "defines.vh"
-`include "csr.vh"
 module wb_stage(
     input     wire                       clk           ,
     input     wire                       reset         ,
@@ -44,6 +43,7 @@ assign {WB_gr_we       ,
 assign WB_exc_now = WB_exc_last;
 wire [5:0]wb_ecode;
 wire [8:0]wb_esubcode;
+//注意各个例外有优先级！我写的代码已经加上了优先级，后面如果补充例外，先看指令集手册关于优先级的要求！
 assign wb_ecode = {6{WB_exc_now[`EXC_INT]}} & `ECODE_INT |
 				{6{WB_exc_now[`EXC_PIL]}} & `ECODE_PIL |
 				{6{WB_exc_now[`EXC_PIS]}} & `ECODE_PIS |
@@ -63,7 +63,7 @@ assign wb_ecode = {6{WB_exc_now[`EXC_INT]}} & `ECODE_INT |
 
 assign wb_esubcode = {9{WB_exc_now[`EXC_ADEM]}} & `ESUBCODE_ADEM;
 wire wb_ex = |WB_exc_now;
-wire [31:0]wb_vaddr = 32'b0;
+wire [31:0]wb_vaddr = WB_final_result;
 assign WB2CSR_bus = {
 	WB_ertn_flush,
 	wb_ex,
