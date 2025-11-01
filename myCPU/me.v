@@ -1,21 +1,22 @@
+`include "defines.vh"
 module mem_stage(
     input       wire                    clk           ,
     input       wire                   reset         ,
     input       wire                   WB_allow    ,
     output      wire                   MEM_allow    ,
     input       wire                   EX_to_MEM_valid,
-    input  wire[74:0] EX_to_MEM_bus  ,
+    input  wire[`EX2MEM_BUS_LEN-1:0] EX_to_MEM_bus  ,
     output       wire                  MEM_to_WB_valid,
-    output wire[69:0] MEM_to_WB_bus  ,
+    output wire[`MEM2WB_BUS_LEN-1:0] MEM_to_WB_bus  ,
     //from data-sram
     input  wire[31:0] data_sram_rdata,
-    output wire [37:0] MEM_to_ID_forward
+    output wire [`MEM_BYPASS_LEN-1:0] MEM_to_ID_forward
 );
 
 reg         MEM_valid;
 wire        MEM_ready_go;
 
-reg [74:0] EX_to_MEM_bus_reg;
+reg [`EX2MEM_BUS_LEN-1:0] EX_to_MEM_bus_reg;
 wire        MEM_res_from_mem;
 wire        MEM_gr_we;
 wire [ 4:0] MEM_dest;
@@ -25,6 +26,12 @@ wire        MEM_is_ld_b;
 wire        MEM_is_ld_h;
 wire        MEM_is_ld_bu;
 wire        MEM_is_ld_hu;
+
+wire [`EXC_WIDTH-1:0]MEM_exc_last;
+wire [`EXC_WIDTH-1:0]MEM_exc_now;
+wire [79:0]MEM_csr_access;
+wire MEM_ertn_flush;
+wire MEM_res_from_csr;
 
 wire [31:0] load_res;
 
@@ -40,17 +47,26 @@ assign {MEM_res_from_mem,
         MEM_is_ld_b     ,
         MEM_is_ld_h     ,
         MEM_is_ld_bu    ,
-        MEM_is_ld_hu
+        MEM_is_ld_hu,
+		MEM_exc_last,
+		MEM_csr_access,
+		MEM_ertn_flush,
+		MEM_res_from_csr
 } = EX_to_MEM_bus_reg;
-
-assign MEM_to_WB_bus = {MEM_gr_we       ,  //69
-                       MEM_dest        ,  //68:64
-                       MEM_final_result,  //63:32
-                       MEM_pc             //31:0
+assign MEM_exc_now = MEM_exc_last;
+assign MEM_to_WB_bus = {MEM_gr_we       , 
+                       MEM_dest        ,  
+                       MEM_final_result, 
+                       MEM_pc,
+					   MEM_exc_now,
+					   MEM_csr_access,
+					   MEM_ertn_flush,
+					   MEM_res_from_csr
                       };
 assign MEM_to_ID_forward = {MEM_gr_we,
                          MEM_to_ID_dest,
-                         MEM_final_result
+                         MEM_final_result,
+						 MEM_res_from_csr
                         };
 assign MEM_ready_go    = 1'b1;
 assign MEM_allow     = !MEM_valid || MEM_ready_go && WB_allow;
@@ -58,15 +74,19 @@ assign MEM_to_WB_valid = MEM_valid && MEM_ready_go;
 always @(posedge clk) begin
     if (reset) begin
         MEM_valid <= 1'b0;
+        EX_to_MEM_bus_reg <= {`EX2MEM_BUS_LEN{1'b0}};
     end
     else if (MEM_allow) begin
         MEM_valid <= EX_to_MEM_valid;
-    end
+        if (EX_to_MEM_valid)
+            EX_to_MEM_bus_reg <= EX_to_MEM_bus;
+        else begin
+			
+		end
 
-    if (EX_to_MEM_valid && MEM_allow) begin
-        EX_to_MEM_bus_reg  <= EX_to_MEM_bus;
     end
 end
+
 
 assign load_res         = (MEM_is_ld_b || MEM_is_ld_bu) ?
                             (MEM_alu_result[1:0] == 2'b00) ? {24'b0, data_sram_rdata[7:0]}   :
