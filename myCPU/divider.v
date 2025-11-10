@@ -5,7 +5,8 @@ module divider (
 	input wire [31:0]src2,
 	input wire is_div_mod_s, 
 	input wire is_div_mod_u,
-	input wire div_or_mod, //若为除法，置为1，否则为mod,置为0
+	input wire div_or_mod, //��Ϊ��������Ϊ1������Ϊmod,��Ϊ0
+	input wire valid,
 	output wire [31:0]div_result,
 	output wire div_done
 );
@@ -70,7 +71,10 @@ always @(*) begin
 			
 		end
 		DONE:begin
-			s_next_state = WAIT;
+			if(valid)
+				s_next_state = WAIT;
+			else
+				s_next_state = DONE;
 		end
 		default: s_next_state = INIT;
 	endcase

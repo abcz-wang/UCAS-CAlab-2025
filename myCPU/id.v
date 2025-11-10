@@ -19,6 +19,7 @@ module id_stage(
 
 wire        br_taken;
 wire [31:0] br_target;
+wire        br_stall;
 wire [31:0] ID_pc;
 wire [31:0] ID_inst;
 reg         ID_valid   ;
@@ -263,7 +264,7 @@ assign alu_op[14]  = inst_mulh_wu;
 
 wire is_div_mod_s = inst_div_w | inst_mod_w ;
 wire is_div_mod_u = inst_div_wu | inst_mod_wu;
-wire div_or_mod = inst_div_w | inst_div_wu;//若为除法，置为1，否则为mod,置为0
+wire div_or_mod = inst_div_w | inst_div_wu;//????????????1???????mod,???0
 
 wire is_ld_b = inst_ld_b;
 wire is_ld_h = inst_ld_h;
@@ -271,7 +272,7 @@ wire is_ld_bu = inst_ld_bu;
 wire is_ld_hu = inst_ld_hu;
 wire is_st_b = inst_st_b;
 wire is_st_h = inst_st_h;
-
+wire is_st_w = inst_st_w;
 
 
 assign need_ui5   =  inst_slli_w | inst_srli_w | inst_srai_w;
@@ -295,7 +296,7 @@ assign br_offs = need_si26 ? {{ 4{i26[25]}}, i26[25:0], 2'b0} :
                               {{14{i16[15]}}, i16[15:0], 2'b0} ;
 
 assign jirl_offs = {{14{i16[15]}}, i16[15:0], 2'b0};
-//源操作数是rd的指令
+//?????????rd?????
 assign src_reg_is_rd = inst_beq | inst_bne | inst_st_w | inst_st_b | inst_st_h | inst_blt | inst_bge | inst_bltu | inst_bgeu | inst_csrwr |inst_csrxchg;
 
 assign src1_is_pc    = inst_jirl | inst_bl | inst_pcaddu12i;
@@ -321,17 +322,17 @@ assign src2_is_imm   = inst_slli_w   |
                        inst_ld_h     |
                        inst_ld_bu    |
                        inst_ld_hu;
-//是load指令，需要暂停流水
+//??load????????????
 assign res_from_mem  = inst_ld_w |
                        inst_ld_b |
                        inst_ld_h |
                        inst_ld_bu|
                        inst_ld_hu;
 assign dst_is_r1     = inst_bl;
-//是否写寄存器
+//???��?????
 assign gr_we         = ~inst_st_w & ~inst_st_b & ~inst_st_h & ~inst_beq & ~inst_bne & ~inst_b & ~inst_blt 
 					& ~inst_bge & ~inst_bltu & ~inst_bgeu & ~inst_syscall & ~inst_ertn & ~inst_break; 
-//是store指令
+//??store???
 assign mem_we        = inst_st_w | inst_st_b | inst_st_h;
 assign dest          = dst_is_r1 ? 5'd1 :
 					inst_rdcntid?rj :
@@ -387,6 +388,18 @@ assign br_taken = (   inst_beq  &&  rj_eq_rd
                    || inst_b    
 )  && ID_valid && ~load_stall;
 
+
+assign br_stall = (   inst_beq  &&  rj_eq_rd
+                   || inst_bne  && ~rj_eq_rd
+                   || inst_blt  &&  rj_slt_rd
+                   || inst_bge  && ~rj_slt_rd
+                   || inst_bltu &&  rj_sltu_rd
+                   || inst_bgeu && ~rj_sltu_rd
+                   || inst_jirl
+                   || inst_bl
+                   || inst_b    
+)  && ID_valid && load_stall;
+
 assign br_target = (inst_beq || inst_bne || inst_bl || inst_b || inst_blt || inst_bge || inst_bltu || inst_bgeu) ? (ID_pc + br_offs) :
                                                    /*inst_jirl*/ (rj_value + jirl_offs);
 assign alu_src1 = src1_is_pc  ? ID_pc : rj_value;
@@ -399,7 +412,7 @@ wire csr_we = inst_csrwr | inst_csrxchg;
 wire csr_re = inst_csrrd | inst_csrxchg | inst_csrwr | inst_rdcntid;
 wire [31:0] csr_wvalue = rkd_value;
 wire [31:0] csr_wmask = inst_csrxchg ? rj_value : 32'hFFFFFFFF;
-wire res_from_csr = inst_csrrd | inst_csrwr | inst_csrxchg | inst_rdcntid;//没有ertn，因为其会flush
+wire res_from_csr = inst_csrrd | inst_csrwr | inst_csrxchg | inst_rdcntid;//???ertn????????flush
 wire is_sys = inst_syscall;
 wire is_break = inst_break;
 wire ertn_flush = inst_ertn;
@@ -407,7 +420,7 @@ wire ertn_flush = inst_ertn;
 wire [79:0]csr_access = {csr_num, csr_re, csr_we, csr_wvalue, csr_wmask};
 
 
-assign ID_to_IF_bus = {br_taken, br_target};
+assign ID_to_IF_bus = {br_stall, br_taken, br_target};
 
 reg  [`IF2ID_BUS_LEN -1:0] IF_to_ID_bus_reg;
 
@@ -415,7 +428,7 @@ assign {exc_last,
 		ID_inst,
         ID_pc  } = IF_to_ID_bus_reg;
 
-// 以后新增指令，只需在这里加上即可
+// ?????????????????????????
 wire inst_valid = inst_add_w   | inst_sub_w   | inst_slt    | inst_sltu  |
                   inst_nor     | inst_and     | inst_or     | inst_xor   |
                   inst_slli_w  | inst_srli_w  | inst_srai_w | inst_addi_w|
@@ -443,7 +456,7 @@ assign exc_now = has_int? { {(`EXC_WIDTH-`EXC_INT-1){1'b0}}, has_int, {`EXC_INT{
 // 							| { {(`EXC_WIDTH-`EXC_BRK-1){1'b0}}, is_break, {`EXC_BRK{1'b0}} }
 // 							| { {(`EXC_WIDTH-`EXC_INE-1){1'b0}}, exc_ine, {`EXC_INE{1'b0}} };
 
-//WB->ID，写回阶段传回的寄存器堆写使能，写地址，写数据
+
 assign {rf_we   ,  
         rf_waddr,  
         rf_wdata   
@@ -467,6 +480,7 @@ assign ID_to_EX_bus = {alu_op       ,
                        is_ld_bu     ,
                        is_st_b      ,
                        is_st_h	,
+                       is_st_w      ,
 					   exc_now,
 					   csr_access,
 					   ertn_flush,
@@ -496,9 +510,7 @@ assign {WB_to_ID_we,
 assign ID_ready_go    = ~load_stall;
 assign ID_allow     = !ID_valid || ID_ready_go && EX_allow;
 assign ID_to_EX_valid = ID_valid && ID_ready_go;
-
-
-                
+              
 
 assign no_rj    = inst_b | inst_bl | inst_lu12i_w | inst_pcaddu12i | inst_csrrd |inst_csrwr|inst_syscall|inst_ertn|inst_break|inst_rdcntid|inst_rdcntvh_w|inst_rdcntvl_w;
 assign no_rk    = inst_slli_w | inst_srli_w | inst_srai_w | inst_addi_w | inst_ld_w | inst_st_w |inst_st_b | inst_st_h | inst_jirl | 
@@ -510,7 +522,7 @@ assign no_rk    = inst_slli_w | inst_srli_w | inst_srai_w | inst_addi_w | inst_l
                 | inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu
 				|inst_csrrd |inst_csrwr|inst_csrxchg|inst_syscall|inst_ertn
 				|inst_break|inst_rdcntid|inst_rdcntvh_w|inst_rdcntvl_w;
-assign no_rd    = ~inst_st_w & ~inst_beq & ~inst_bne & ~inst_blt & ~inst_bge & ~inst_bltu & ~inst_bgeu & ~inst_csrwr & ~inst_csrxchg;//不使用rd作为源操作数
+assign no_rd    = ~inst_st_w & ~inst_beq & ~inst_bne & ~inst_blt & ~inst_bge & ~inst_bltu & ~inst_bgeu & ~inst_csrwr & ~inst_csrxchg;//?????rd??????????
 
 assign rj_wait = ~no_rj && (rj != 5'b00000) && ((rj == EX_to_ID_dest) || (rj == MEM_to_ID_dest) || (rj == WB_to_ID_dest));
 assign rk_wait = ~no_rk && (rk != 5'b00000) && ((rk == EX_to_ID_dest) || (rk == MEM_to_ID_dest) || (rk == WB_to_ID_dest));

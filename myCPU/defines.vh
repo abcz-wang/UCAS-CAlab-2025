@@ -1,10 +1,10 @@
 `define IF2ID_BUS_LEN   80
 
-`define ID2EX_BUS_LEN  260
-`define EX2MEM_BUS_LEN  173
+`define ID2EX_BUS_LEN  261
+`define EX2MEM_BUS_LEN  174
 `define MEM2WB_BUS_LEN  168
 `define WB2ID_BUS_LEN  38
-`define ID2IF_BUS_LEN  33
+`define ID2IF_BUS_LEN  34
 
 `define EX_BYPASS_LEN   39
 `define MEM_BYPASS_LEN  39

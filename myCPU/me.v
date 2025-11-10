@@ -10,7 +10,8 @@ module mem_stage(
     output wire[`MEM2WB_BUS_LEN-1:0] MEM_to_WB_bus  ,
     //from data-sram
     input  wire[31:0] data_sram_rdata,
-    output wire [`MEM_BYPASS_LEN-1:0] MEM_to_ID_forward
+    output wire [`MEM_BYPASS_LEN-1:0] MEM_to_ID_forward,
+    input wire          data_sram_data_ok
 );
 
 reg         MEM_valid;
@@ -38,7 +39,7 @@ wire [31:0] load_res;
 wire [31:0] mem_result;
 wire [31:0] MEM_final_result;
 wire [ 4:0] MEM_to_ID_dest;
-
+wire MEM_req;
 assign {MEM_res_from_mem,
         MEM_gr_we       ,
         MEM_dest        ,
@@ -51,7 +52,8 @@ assign {MEM_res_from_mem,
 		MEM_exc_last,
 		MEM_csr_access,
 		MEM_ertn_flush,
-		MEM_res_from_csr
+		MEM_res_from_csr,
+        MEM_req
 } = EX_to_MEM_bus_reg;
 assign MEM_exc_now = MEM_exc_last;
 assign MEM_to_WB_bus = {MEM_gr_we       , 
@@ -68,7 +70,7 @@ assign MEM_to_ID_forward = {MEM_gr_we,
                          MEM_final_result,
 						 MEM_res_from_csr
                         };
-assign MEM_ready_go    = 1'b1;
+assign MEM_ready_go    = ~MEM_req | (MEM_req & data_sram_data_ok);
 assign MEM_allow     = !MEM_valid || MEM_ready_go && WB_allow;
 assign MEM_to_WB_valid = MEM_valid && MEM_ready_go;
 always @(posedge clk) begin
