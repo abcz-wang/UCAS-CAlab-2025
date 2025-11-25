@@ -10,7 +10,8 @@ module mem_stage(
     output wire[`MEM2WB_BUS_LEN-1:0] MEM_to_WB_bus  ,
     //from data-sram
     input  wire[31:0] data_sram_rdata,
-    output wire [`MEM_BYPASS_LEN-1:0] MEM_to_ID_forward
+    output wire [`MEM_BYPASS_LEN-1:0] MEM_to_ID_forward,
+    input wire          data_sram_data_ok
 );
 
 reg         MEM_valid;
@@ -32,13 +33,13 @@ wire [`EXC_WIDTH-1:0]MEM_exc_now;
 wire [79:0]MEM_csr_access;
 wire MEM_ertn_flush;
 wire MEM_res_from_csr;
-
+wire        data_ok_mem_id;
 wire [31:0] load_res;
 
 wire [31:0] mem_result;
 wire [31:0] MEM_final_result;
 wire [ 4:0] MEM_to_ID_dest;
-
+wire MEM_req;
 assign {MEM_res_from_mem,
         MEM_gr_we       ,
         MEM_dest        ,
@@ -51,7 +52,8 @@ assign {MEM_res_from_mem,
 		MEM_exc_last,
 		MEM_csr_access,
 		MEM_ertn_flush,
-		MEM_res_from_csr
+		MEM_res_from_csr,
+        MEM_req
 } = EX_to_MEM_bus_reg;
 assign MEM_exc_now = MEM_exc_last;
 assign MEM_to_WB_bus = {MEM_gr_we       , 
@@ -66,9 +68,11 @@ assign MEM_to_WB_bus = {MEM_gr_we       ,
 assign MEM_to_ID_forward = {MEM_gr_we,
                          MEM_to_ID_dest,
                          MEM_final_result,
-						 MEM_res_from_csr
+						 MEM_res_from_csr,
+                         data_ok_mem_id
                         };
-assign MEM_ready_go    = 1'b1;
+//不是load应该直接走，是就等数据返回，但防止store乱了，所以store也一起等
+assign MEM_ready_go    = ~MEM_req | (MEM_req & data_sram_data_ok);
 assign MEM_allow     = !MEM_valid || MEM_ready_go && WB_allow;
 assign MEM_to_WB_valid = MEM_valid && MEM_ready_go;
 always @(posedge clk) begin
@@ -105,8 +109,8 @@ assign mem_result       = (MEM_is_ld_b)  ? ({{24{load_res[7]}}, load_res[7:0]}) 
                           (MEM_is_ld_hu) ? ({16'b0, load_res[15:0]}) :
                           data_sram_rdata;
 assign MEM_final_result = MEM_res_from_mem ? mem_result : MEM_alu_result;
-
-
+//load而且成功返回数据，告诉id不用阻塞了
+assign data_ok_mem_id = MEM_req && data_sram_data_ok;
 
 
 endmodule

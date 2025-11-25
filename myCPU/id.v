@@ -19,6 +19,7 @@ module id_stage(
 
 wire        br_taken;
 wire [31:0] br_target;
+wire        br_stall;
 wire [31:0] ID_pc;
 wire [31:0] ID_inst;
 reg         ID_valid   ;
@@ -158,6 +159,9 @@ wire MEM_to_ID_we;
 wire WB_res_from_csr;
 wire EX_res_from_csr;
 wire MEM_res_from_csr;
+wire EX_to_ID_req;
+wire        data_ok_mem_id;
+wire [4:0]EX_to_ID_dest_dest;
 assign op_31_26  = ID_inst[31:26];
 assign op_25_22  = ID_inst[25:22];
 assign op_21_20  = ID_inst[21:20];
@@ -271,7 +275,7 @@ wire is_ld_bu = inst_ld_bu;
 wire is_ld_hu = inst_ld_hu;
 wire is_st_b = inst_st_b;
 wire is_st_h = inst_st_h;
-
+wire is_st_w = inst_st_w;
 
 
 assign need_ui5   =  inst_slli_w | inst_srli_w | inst_srai_w;
@@ -385,7 +389,19 @@ assign br_taken = (   inst_beq  &&  rj_eq_rd
                    || inst_jirl
                    || inst_bl
                    || inst_b    
-)  && ID_valid && ~load_stall;
+)  && ID_valid && ~load_stall && ~EX_to_ID_dest_dest_stall;
+
+
+assign br_stall = (   inst_beq  &&  rj_eq_rd
+                   || inst_bne  && ~rj_eq_rd
+                   || inst_blt  &&  rj_slt_rd
+                   || inst_bge  && ~rj_slt_rd
+                   || inst_bltu &&  rj_sltu_rd
+                   || inst_bgeu && ~rj_sltu_rd
+                   || inst_jirl
+                   || inst_bl
+                   || inst_b    
+)  && ID_valid && load_stall;
 
 assign br_target = (inst_beq || inst_bne || inst_bl || inst_b || inst_blt || inst_bge || inst_bltu || inst_bgeu) ? (ID_pc + br_offs) :
                                                    /*inst_jirl*/ (rj_value + jirl_offs);
@@ -399,7 +415,7 @@ wire csr_we = inst_csrwr | inst_csrxchg;
 wire csr_re = inst_csrrd | inst_csrxchg | inst_csrwr | inst_rdcntid;
 wire [31:0] csr_wvalue = rkd_value;
 wire [31:0] csr_wmask = inst_csrxchg ? rj_value : 32'hFFFFFFFF;
-wire res_from_csr = inst_csrrd | inst_csrwr | inst_csrxchg | inst_rdcntid;//没有ertn，因为其会flush
+wire res_from_csr = inst_csrrd | inst_csrwr | inst_csrxchg | inst_rdcntid;//???ertn????????flush
 wire is_sys = inst_syscall;
 wire is_break = inst_break;
 wire ertn_flush = inst_ertn;
@@ -407,7 +423,7 @@ wire ertn_flush = inst_ertn;
 wire [79:0]csr_access = {csr_num, csr_re, csr_we, csr_wvalue, csr_wmask};
 
 
-assign ID_to_IF_bus = {br_taken, br_target};
+assign ID_to_IF_bus = {br_stall, br_taken, br_target};
 
 reg  [`IF2ID_BUS_LEN -1:0] IF_to_ID_bus_reg;
 
@@ -467,6 +483,7 @@ assign ID_to_EX_bus = {alu_op       ,
                        is_ld_bu     ,
                        is_st_b      ,
                        is_st_h	,
+                       is_st_w      ,
 					   exc_now,
 					   csr_access,
 					   ertn_flush,
@@ -478,13 +495,16 @@ assign ID_to_EX_bus = {alu_op       ,
 assign {EX_to_ID_we,
         EX_to_ID_dest,
         EX_to_ID_result,
-		EX_res_from_csr
+		EX_res_from_csr,
+        EX_to_ID_req,
+        EX_to_ID_dest_dest
        } = EX_to_ID_forward;
 
 assign {MEM_to_ID_we,
         MEM_to_ID_dest,
         MEM_to_ID_result,
-		MEM_res_from_csr
+		MEM_res_from_csr,
+        data_ok_mem_id
        } = MEM_to_ID_forward;
 
 assign {WB_to_ID_we,
@@ -493,12 +513,10 @@ assign {WB_to_ID_we,
 		WB_res_from_csr
        } = WB_to_ID_forward;
 
-assign ID_ready_go    = ~load_stall;
+assign ID_ready_go    = ~load_stall  && ~EX_to_ID_dest_dest_stall;
 assign ID_allow     = !ID_valid || ID_ready_go && EX_allow;
 assign ID_to_EX_valid = ID_valid && ID_ready_go;
-
-
-                
+              
 
 assign no_rj    = inst_b | inst_bl | inst_lu12i_w | inst_pcaddu12i | inst_csrrd |inst_csrwr|inst_syscall|inst_ertn|inst_break|inst_rdcntid|inst_rdcntvh_w|inst_rdcntvl_w;
 assign no_rk    = inst_slli_w | inst_srli_w | inst_srai_w | inst_addi_w | inst_ld_w | inst_st_w |inst_st_b | inst_st_h | inst_jirl | 
@@ -510,7 +528,7 @@ assign no_rk    = inst_slli_w | inst_srli_w | inst_srai_w | inst_addi_w | inst_l
                 | inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu
 				|inst_csrrd |inst_csrwr|inst_csrxchg|inst_syscall|inst_ertn
 				|inst_break|inst_rdcntid|inst_rdcntvh_w|inst_rdcntvl_w;
-assign no_rd    = ~inst_st_w & ~inst_beq & ~inst_bne & ~inst_blt & ~inst_bge & ~inst_bltu & ~inst_bgeu & ~inst_csrwr & ~inst_csrxchg;//不使用rd作为源操作数
+assign no_rd    = ~inst_st_w & ~inst_beq & ~inst_bne & ~inst_blt & ~inst_bge & ~inst_bltu & ~inst_bgeu & ~inst_csrwr & ~inst_csrxchg;//?????rd??????????
 
 assign rj_wait = ~no_rj && (rj != 5'b00000) && ((rj == EX_to_ID_dest) || (rj == MEM_to_ID_dest) || (rj == WB_to_ID_dest));
 assign rk_wait = ~no_rk && (rk != 5'b00000) && ((rk == EX_to_ID_dest) || (rk == MEM_to_ID_dest) || (rk == WB_to_ID_dest));
@@ -551,5 +569,40 @@ always @(posedge clk) begin
 end
 
 
+//当ex阶段是load指令的时候，直接阻塞id，因为在多拍取指读数的影响下，有可能在原有的阻塞指令生效前，id当前指令已经进ex了
+//EX_to_ID_dest是&了valid的，但是EX_to_ID_dest_dest是新加的，就是exdest自身，比&valid的持续更长
+//但是直接把EX_to_ID_dest中的&valid去掉会出问题
+//所以加了一个新的信号EX_to_ID_dest_dest，专门用来处理load指令的暂停
+//EX_to_ID_req_reg其实和EX_to_ID_req没有关系
+//EX_to_ID_req_reg只是用来标记当前周期if阶段是否有指令进入id阶段
+//有新指令进入id之后就可以进行寄存器比价了，如果发现目的寄存器和源寄存器不冲突了，就可以解除暂停
+//否则一直暂停到数据返回为止
+reg EX_to_ID_dest_dest_stall;
+reg EX_to_ID_req_reg;
+always @(posedge clk) begin
+    if(reset) begin
+        EX_to_ID_dest_dest_stall <= 1'b0;
+    end
+    else if (EX_to_ID_req )  begin
+        EX_to_ID_dest_dest_stall <= 1'b1;
+    end
+    else if (~(EX_to_ID_dest_dest == rj[4:0] && rj!=5'b00000) && EX_to_ID_req_reg && EX_to_ID_dest_dest_stall) begin
+        EX_to_ID_dest_dest_stall <= 1'b0;
+    end
+    else if (EX_to_ID_dest_dest_stall &&  data_ok_mem_id) begin
+        EX_to_ID_dest_dest_stall <= 1'b0;
+    end
+end
 
+always @(posedge clk) begin
+    if (reset) begin
+        EX_to_ID_req_reg<=1'b0;
+    end
+    else if (ID_allow && IF_to_ID_valid) begin
+        EX_to_ID_req_reg<=1'b1;
+    end
+    else  begin
+        EX_to_ID_req_reg<=1'b0;
+    end
+end
 endmodule
