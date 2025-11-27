@@ -67,8 +67,8 @@ module sram_axi_bridge(
 
 
 //第一部分：ar通道
-localparam AR_INIT       = 3'b001;  // 初始状态：等待读请求
-           AR_INST       = 3'b010;  // 指令读状态：正在向 AXI 发送指令读地址
+localparam AR_INIT       = 3'b001,  // 初始状态：等待读请求
+           AR_INST       = 3'b010,  // 指令读状态：正在向 AXI 发送指令读地址
            AR_DATA       = 3'b100;  // 数据读状态：正在向 AXI 发送数据读地址
 
 
@@ -287,8 +287,8 @@ assign wdata = aw_data_reg;
 assign wstrb = aw_wstrb_reg;
 
 //第四部分：b通道
-localparam B_INIT       = 3'b001;  // 初始状态：等待 W 通道写数据传输完成
-           B_DATA_READY = 3'b010;  // 响应接收状态：准备接收 AXI 从设备的写响应
+localparam B_INIT       = 3'b001,  // 初始状态：等待 W 通道写数据传输完成
+           B_DATA_READY = 3'b010,  // 响应接收状态：准备接收 AXI 从设备的写响应
            B_DATA_END   = 3'b100;  // 响应完成状态：写响应已接收，写传输正式结束
 
 reg [2:0]       b_state;
