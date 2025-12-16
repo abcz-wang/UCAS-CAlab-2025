@@ -1,4 +1,5 @@
 `include "defines.vh"
+
 module mycpu_top(
     input  wire                 aclk,
     input  wire                 aresetn,
@@ -86,6 +87,105 @@ wire has_int;
 wire [7:0]hw_int_in = 8'b0;
 wire [31:0]coreid_in = 32'b0;
 
+// task 18
+// TLB
+// search port 0 (for fetch)
+wire [              18:0] s0_vppn;
+wire                      s0_va_bit12;
+wire [               9:0] s0_asid;
+wire                      s0_found;
+wire [               3:0] s0_index;
+wire [              19:0] s0_ppn;
+wire [               5:0] s0_ps;
+wire [               1:0] s0_plv;
+wire [               1:0] s0_mat;
+wire                      s0_d;
+wire                      s0_v;
+    
+// search port 1 (for load/store)
+wire [              18:0] s1_vppn;
+wire                      s1_va_bit12;
+wire [               9:0] s1_asid;
+wire                      s1_found;
+wire [               3:0] s1_index;
+wire [              19:0] s1_ppn;
+wire [               5:0] s1_ps;
+wire [               1:0] s1_plv;
+wire [               1:0] s1_mat;
+wire                      s1_d;
+wire                      s1_v;
+
+// invtlb opcode
+wire                      invtlb_valid;
+wire  [              4:0] invtlb_op;
+
+wire                      inst_wb_tlbfill;
+
+// write port
+wire                      tlbwe; //w(rite) e(nable)
+wire [               3:0] csr_tlbidx_index;
+wire                      w_e;
+wire [              18:0] tlbehi_vppn_fromCSR;
+wire [               5:0] w_ps;
+wire [               9:0] asid_fromCSR;
+wire                      w_g;
+
+wire [              19:0] w_ppn0;
+wire [               1:0] w_plv0;
+wire [               1:0] w_mat0;
+wire                      w_d0;
+wire                      w_v0;
+
+wire [              19:0] w_ppn1;
+wire [               1:0] w_plv1;
+wire [               1:0] w_mat1;
+wire                      w_d1;
+wire                      w_v1;
+// read port
+wire                      r_e;
+wire [              18:0] r_vppn;
+wire [               5:0] r_ps;
+wire [               9:0] r_asid;
+wire                      r_g;
+
+wire [              19:0] r_ppn0;
+wire [               1:0] r_plv0;
+wire [               1:0] r_mat0;
+wire                      r_d0;
+wire                      r_v0;
+
+wire [              19:0] r_ppn1;
+wire [               1:0] r_plv1;
+wire [               1:0] r_mat1;
+wire                      r_d1;
+wire                      r_v;
+
+wire wb_refetch_flush;
+wire [31:0] ertnentry_refetchtarget = ertn_flush ? era_pc : debug_wb_pc + 32'd4;
+wire                      inst_wb_tlbsrch;
+wire                      wb_tlbsrch_found;
+wire [               3:0]    wb_tlbsrch_idxgot;
+wire [               3:0]    csr_tlbidx_index;
+wire                      inst_wb_tlbrd;
+wire [15:0] EX_tlb_stall_bus;
+wire [15:0] MEM_tlb_stall_bus;
+
+// task 19
+wire [2:0] csr_dmw0_pseg;
+wire [2:0] csr_dmw0_vseg;
+wire [2:0] csr_dmw1_pseg;
+wire [2:0] csr_dmw1_vseg;
+wire       csr_dmw0_plv0;
+wire       csr_dmw0_plv3;
+wire       csr_dmw1_plv0;
+wire       csr_dmw1_plv3;
+wire       csr_direct_addr;
+wire [1:0] crmd_plv_fromCSR;
+
+wire       exc_now_fetch;
+wire       wb_ex_e;
+
+
 
 wire inst_sram_req;
 wire inst_sram_wr;
@@ -129,8 +229,62 @@ csr my_csr(
 	.era_pc(era_pc),
 	.has_int(has_int),
 	.WB2CSR_bus(WB2CSR_bus),
-	.coreid_in(coreid_in)
+	.coreid_in(coreid_in),
+    // task 18
+    .csr_asid_asid   (asid_fromCSR),
+    .csr_tlbehi_vppn (tlbehi_vppn_fromCSR),
+    .csr_tlbidx_index(csr_tlbidx_index),
+
+    .tlbsrch_we        (inst_wb_tlbsrch),
+    .tlbsrch_hit       (wb_tlbsrch_found),
+    .tlbsrch_hit_index (wb_tlbsrch_idxgot),
+    .tlbrd_we          (inst_wb_tlbrd),
+
+    .r_tlb_e         (r_e),
+    .r_tlb_ps        (r_ps),
+    .r_tlb_vppn      (r_vppn),
+    .r_tlb_asid      (r_asid),
+    .r_tlb_g         (r_g),
+    .r_tlb_ppn0      (r_ppn0),
+    .r_tlb_plv0      (r_plv0),
+    .r_tlb_mat0      (r_mat0),
+    .r_tlb_d0        (r_d0),
+    .r_tlb_v0        (r_v0),
+    .r_tlb_ppn1      (r_ppn1),
+    .r_tlb_plv1      (r_plv1),
+    .r_tlb_mat1      (r_mat1),
+    .r_tlb_d1        (r_d1),
+    .r_tlb_v1        (r_v1),
+
+    .w_tlb_e         (w_e),
+    .w_tlb_ps        (w_ps),
+    .w_tlb_vppn      (w_vppn),
+    .w_tlb_asid      (w_asid),
+    .w_tlb_g         (w_g),
+    .w_tlb_ppn0      (w_ppn0),
+    .w_tlb_plv0      (w_plv0),
+    .w_tlb_mat0      (w_mat0),
+    .w_tlb_d0        (w_d0),
+    .w_tlb_v0        (w_v0),
+    .w_tlb_ppn1      (w_ppn1),
+    .w_tlb_plv1      (w_plv1),
+    .w_tlb_mat1      (w_mat1),
+    .w_tlb_d1        (w_d1),
+    .w_tlb_v1        (w_v1),
+    // task 19
+    .csr_crmd_plv (crmd_plv_fromCSR),
+    .csr_dmw0_pseg(csr_dmw0_pseg),
+    .csr_dmw0_vseg(csr_dmw0_vseg),
+    .csr_dmw1_pseg(csr_dmw1_pseg),
+    .csr_dmw1_vseg(csr_dmw1_vseg),
+    .csr_dmw0_plv0(csr_dmw0_plv0),
+    .csr_dmw0_plv3(csr_dmw0_plv3),
+    .csr_dmw1_plv0(csr_dmw1_plv0),
+    .csr_dmw1_plv3(csr_dmw1_plv3),
+    .csr_direct_addr(csr_direct_addr),
+    .exc_now_fetch(exc_now_fetch)
 );
+
 
 // IF stage
 if_stage if_stage(
@@ -140,10 +294,10 @@ if_stage if_stage(
     .ID_to_IF_bus   (ID_to_IF_bus),
     .IF_to_ID_valid (IF_to_ID_valid),
     .IF_to_ID_bus   (IF_to_ID_bus),
-	.wb_ex(wb_ex),
+	.wb_ex(wb_ex_e),
 	.ex_entry(ex_entry),
-	.ertn_flush(ertn_flush),
-	.era_pc(era_pc),
+	.ertn_flush(ertn_flush || wb_refetch_flush),
+	.era_pc(ertnentry_refetchtarget),
     // inst sram interface
     // .inst_sram_en   (inst_sram_en),
     // .inst_sram_we   (inst_sram_we),
@@ -155,12 +309,30 @@ if_stage if_stage(
     .inst_sram_wdata(inst_sram_wdata),
     .inst_sram_rdata(inst_sram_rdata),
     .inst_sram_addr_ok(inst_sram_addr_ok),
-    .inst_sram_data_ok(inst_sram_data_ok)
+    .inst_sram_data_ok(inst_sram_data_ok),
+    .s0_vppn    (s0_vppn   ),
+    .s0_va_bit12(s0_va_bit12),
+    .s0_found   (s0_found  ),
+    .s0_index   (s0_index  ),
+    .s0_ppn     (s0_ppn    ),
+    .s0_ps      (s0_ps     ),
+    .s0_plv     (s0_plv    ),
+    .s0_v       (s0_v      ),
+    .crmd_plv_fromCSR(crmd_plv_fromCSR),
+    .csr_dmw0_pseg(csr_dmw0_pseg),
+    .csr_dmw0_vseg(csr_dmw0_vseg),
+    .csr_dmw1_pseg(csr_dmw1_pseg),
+    .csr_dmw1_vseg(csr_dmw1_vseg),
+    .csr_dmw0_plv0(csr_dmw0_plv0),
+    .csr_dmw0_plv3(csr_dmw0_plv3),
+    .csr_dmw1_plv0(csr_dmw1_plv0),
+    .csr_dmw1_plv3(csr_dmw1_plv3),
+    .csr_direct_addr(csr_direct_addr)
 );
 // ID stage
 id_stage id_stage(
     .clk            (aclk),
-    .reset          (reset||wb_ex||ertn_flush),
+    .reset          (reset||wb_ex||ertn_flush||wb_refetch_flush),
     .EX_allow       (EX_allow),
     .ID_allow       (ID_allow),
     .IF_to_ID_valid (IF_to_ID_valid),
@@ -173,12 +345,14 @@ id_stage id_stage(
     .ID_to_IF_bus   (ID_to_IF_bus),
     .WB_to_ID_bus   (WB_to_ID_bus),
     .EX_to_ID_load_up(EX_to_ID_load_up),
-	.has_int(has_int)
+	.has_int(has_int),
+    .EX_tlb_stall_bus(EX_tlb_stall_bus),
+    .MEM_tlb_stall_bus(MEM_tlb_stall_bus)
 );
 // EX stage
 ex_stage ex_stage(
     .clk            (aclk),
-    .reset          (reset||wb_ex||ertn_flush),
+    .reset          (reset||wb_ex||ertn_flush||wb_refetch_flush),
     .MEM_allow      (MEM_allow),
     .EX_allow       (EX_allow),
     .ID_to_EX_valid (ID_to_EX_valid),
@@ -188,7 +362,7 @@ ex_stage ex_stage(
     .EX_to_ID_forward(EX_to_ID_forward),
     .EX_to_ID_load_up(EX_to_ID_load_up),
 	.has_exc(has_exc),
-	.has_ertn(MEM_ertn_flush||ertn_flush),
+	.has_ertn(MEM_ertn_flush||ertn_flush||wb_refetch_flush),
 	.glob_cnt(glob_cnt),
     // data sram interface
     // .data_sram_en   (data_sram_en),
@@ -199,12 +373,41 @@ ex_stage ex_stage(
     .data_sram_wstrb(data_sram_wstrb),
     .data_sram_addr (data_sram_addr),
     .data_sram_wdata(data_sram_wdata),
-    .data_sram_addr_ok(data_sram_addr_ok)
+    .data_sram_addr_ok(data_sram_addr_ok),
+    // task 18
+    .invtlb_op   (invtlb_op),
+    .inst_invtlb (invtlb_valid),
+    .s1_vppn     (s1_vppn),
+    .s1_va_bit12 (s1_va_bit12),
+    .s1_asid     (s1_asid),
+    .s1_found    (s1_found  ),
+    .s1_index    (s1_index  ),
+    .s1_ppn      (s1_ppn    ),
+    .s1_ps       (s1_ps     ),
+    .s1_plv      (s1_plv    ),
+    .s1_mat      (s1_mat    ),
+    .s1_d        (s1_d      ),
+    .s1_v        (s1_v      ),
+    .tlbehi_vppn_fromCSR(tlbehi_vppn_fromCSR),
+    .asid_fromCSR(asid_fromCSR),
+    .EX_tlb_stall_bus(EX_tlb_stall_bus),
+    // task 19
+    .crmd_plv_fromCSR(crmd_plv_fromCSR),
+    .csr_dmw0_pseg(csr_dmw0_pseg),
+    .csr_dmw0_vseg(csr_dmw0_vseg),
+    .csr_dmw1_pseg(csr_dmw1_pseg),
+    .csr_dmw1_vseg(csr_dmw1_vseg),
+    .csr_dmw0_plv0(csr_dmw0_plv0),
+    .csr_dmw0_plv3(csr_dmw0_plv3),
+    .csr_dmw1_plv0(csr_dmw1_plv0),
+    .csr_dmw1_plv3(csr_dmw1_plv3),
+    .csr_direct_addr(csr_direct_addr),
+    .wb_ex_e(wb_ex_e)
 );
 // MEM stage
 mem_stage mem_stage(
     .clk             (aclk),
-    .reset           (reset||wb_ex||ertn_flush),
+    .reset           (reset||wb_ex||ertn_flush||wb_refetch_flush),
     .WB_allow        (WB_allow),
     .MEM_allow       (MEM_allow),
     .EX_to_MEM_valid (EX_to_MEM_valid),
@@ -214,7 +417,8 @@ mem_stage mem_stage(
     .MEM_to_ID_forward (MEM_to_ID_forward),
     //from data-sram
     .data_sram_rdata(data_sram_rdata),
-    .data_sram_data_ok(data_sram_data_ok)
+    .data_sram_data_ok(data_sram_data_ok),
+    .MEM_tlb_stall_bus(MEM_tlb_stall_bus)
 );
 // WB stage
 wb_stage wb_stage(
@@ -228,6 +432,17 @@ wb_stage wb_stage(
 	.WB2CSR_bus			(WB2CSR_bus),
 	.WB_csr_access		(WB_csr_access),
 	.csr_rvalue			(csr_rvalue),
+    // task 18
+    .inst_wb_tlbfill(inst_wb_tlbfill),
+    .inst_wb_tlbsrch(inst_wb_tlbsrch),
+    .tlbwe      (tlbwe),
+    .inst_wb_tlbrd(inst_wb_tlbrd),
+    .wb_tlbsrch_found(wb_tlbsrch_found),
+    .wb_tlbsrch_idxgot(wb_tlbsrch_idxgot),
+    .WB_refetch_flush(wb_refetch_flush),
+    // task 19
+    .WB_exc_fetch(exc_now_fetch),
+    .wb_ex_e(wb_ex_e),
     //trace debug interface
     .debug_wb_pc        (debug_wb_pc),
     .debug_wb_rf_we     (debug_wb_rf_we),
@@ -301,4 +516,83 @@ sram_axi_bridge sram_axi_bridge(
     .data_sram_data_ok  (data_sram_data_ok  ),
     .data_sram_rdata    (data_sram_rdata    )
 );
+
+
+tlb tlb(
+    .clk        (aclk      ),
+    .resetn     (~reset    ),
+
+    .s0_vppn    (s0_vppn   ),
+    .s0_va_bit12(s0_va_bit12),
+    .s0_asid    (asid_fromCSR   ),
+    .s0_found   (s0_found  ),
+    .s0_index   (s0_index  ),
+    .s0_ppn     (s0_ppn    ),
+    .s0_ps      (s0_ps     ),
+    .s0_plv     (s0_plv    ),
+    .s0_mat     (s0_mat    ),
+    .s0_d       (s0_d      ),
+    .s0_v       (s0_v      ),
+
+    .s1_vppn    (s1_vppn   ),
+    .s1_va_bit12(s1_va_bit12),
+    .s1_asid    (s1_asid   ),
+    .s1_found   (s1_found  ),
+    .s1_index   (s1_index  ),
+    .s1_ppn     (s1_ppn    ),
+    .s1_ps      (s1_ps     ),
+    .s1_plv     (s1_plv    ),
+    .s1_mat     (s1_mat    ),
+    .s1_d       (s1_d      ),
+    .s1_v       (s1_v      ),
+
+    .invtlb_valid(invtlb_valid),
+    .invtlb_op  (invtlb_op ),
+
+    .inst_wb_tlbfill(inst_wb_tlbfill),
+
+    .we         (tlbwe     ),
+    .w_index    (csr_tlbidx_index),
+    .w_e        (w_e       ),
+    .w_vppn     (tlbehi_vppn_fromCSR),
+    .w_ps       (w_ps      ),
+    .w_asid     (asid_fromCSR),
+    .w_g        (w_g       ),
+
+    .w_ppn0     (w_ppn0    ),
+    .w_plv0     (w_plv0    ),
+    .w_mat0     (w_mat0    ),
+    .w_d0       (w_d0      ),
+    .w_v0       (w_v0      ),
+
+    .w_ppn1     (w_ppn1    ),
+    .w_plv1     (w_plv1    ),
+    .w_mat1     (w_mat1    ),
+    .w_d1       (w_d1      ),
+    .w_v1       (w_v1      ),
+
+    .r_index    (csr_tlbidx_index),
+    .r_e        (r_e       ),
+    .r_vppn     (r_vppn    ),
+    .r_ps       (r_ps      ),
+    .r_asid     (r_asid    ),
+    .r_g        (r_g       ),
+
+    .r_ppn0     (r_ppn0    ),
+    .r_plv0     (r_plv0    ),
+    .r_mat0     (r_mat0    ),
+    .r_d0       (r_d0      ),
+    .r_v0       (r_v0      ),
+
+    .r_ppn1     (r_ppn1    ),
+    .r_plv1     (r_plv1    ),
+    .r_mat1     (r_mat1    ),
+    .r_d1       (r_d1      ),
+    .r_v1       (r_v1      )
+);
+
+
+
+
+
 endmodule

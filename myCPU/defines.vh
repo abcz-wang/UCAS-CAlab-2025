@@ -1,8 +1,8 @@
-`define IF2ID_BUS_LEN   80
+`define IF2ID_BUS_LEN   88
 
-`define ID2EX_BUS_LEN  261
-`define EX2MEM_BUS_LEN  174
-`define MEM2WB_BUS_LEN  168
+`define ID2EX_BUS_LEN  280
+`define EX2MEM_BUS_LEN  192
+`define MEM2WB_BUS_LEN  218
 `define WB2ID_BUS_LEN  38
 `define ID2IF_BUS_LEN  34
 
@@ -38,6 +38,11 @@
 `define CSR_ESTAT 13'h5
 `define CSR_ERA 13'h6
 `define CSR_BADV 13'h7
+`define CSR_TLBIDX    14'h0010
+`define CSR_TLBEHI    14'h0011
+`define CSR_TLBELO0   14'h0012
+`define CSR_TLBELO1   14'h0013
+`define CSR_ASID      14'h0018
 `define CSR_EENTRY 13'hc
 `define CSR_SAVE0 13'h30
 `define CSR_SAVE1 13'h31
@@ -52,7 +57,6 @@
 `define CSR_CTAG 13'h98
 `define CSR_DMW0 13'h180
 `define CSR_DMW1 13'h181
-
 
 
 `define CSR_CRMD_PLV 1:0
@@ -86,6 +90,41 @@
 `define CSR_TCFG_INITV 31:2
 
 `define CSR_TICLR_CLR 0
+
+// task 17
+`define TLBNUM 16
+
+// task 18
+`define CSR_CRMD_PIE    2
+`define CSR_TCFG_INITVAL 31:2
+`define CSR_TLBIDX_INDEX 3:0
+`define CSR_TLBIDX_PS 29:24
+`define CSR_TLBIDX_NE 31
+`define CSR_TLBEHI_VPPN 31:13
+`define CSR_TLBELO_V  0
+`define CSR_TLBELO_D  1
+`define CSR_TLBELO_PLV 3:2
+`define CSR_TLBELO_MAT 5:4
+`define CSR_TLBELO_G  6
+`define CSR_TLBELO_PPN 27:8
+`define CSR_ASID_ASID 9:0
+`define CSR_ASID_ASIDBITS 23:16
+`define CSR_TLBRENTRY_PA 31:6
+`define CSR_DMW_PLV0  0
+`define CSR_DMW_PLV3  3
+`define CSR_DMW_MAT   5:4
+`define CSR_DMW_PSEG  27:25
+`define CSR_DMW_VSEG  31:29
+
+// task 19
+`define EARRAY_TLBR_FETCH 0     // tlb refill
+`define EARRAY_PIL 1            // load page fault
+`define EARRAY_PIS 2            // store page fault
+`define EARRAY_PIF 3            // fetch page fault
+`define EARRAY_PME 4            // modify page fault
+`define EARRAY_PPI_FETCH 5      // priv page fault
+`define EARRAY_TLBR_MEM 6       // tlb refill
+`define EARRAY_PPI_MEM 7        // priv page fault
 
 // CSR Exception Code
 `define ECODE_INT  6'h00

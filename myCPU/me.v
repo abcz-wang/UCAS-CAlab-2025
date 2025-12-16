@@ -11,7 +11,8 @@ module mem_stage(
     //from data-sram
     input  wire[31:0] data_sram_rdata,
     output wire [`MEM_BYPASS_LEN-1:0] MEM_to_ID_forward,
-    input wire          data_sram_data_ok
+    input wire          data_sram_data_ok,
+    output wire [15:0] MEM_tlb_stall_bus
 );
 
 reg         MEM_valid;
@@ -40,7 +41,31 @@ wire [31:0] mem_result;
 wire [31:0] MEM_final_result;
 wire [ 4:0] MEM_to_ID_dest;
 wire MEM_req;
-assign {MEM_res_from_mem,
+
+// task 18
+wire  [ 9:0] EX_to_MEM_tlb_bus;
+wire        inst_tlbsrch;
+wire        inst_tlbrd;
+wire        inst_tlbwr;
+wire        inst_tlbfill;
+wire        MEM_refetch_flag;
+wire        tlbsrch_found;
+wire [ 3:0] tlbsrch_idxgot;
+wire [ 9:0] MEM_to_WB_tlb_bus;
+//csr
+wire [13:0] MEM_csr_num;
+wire        MEM_csr_we;
+wire [31:0] MEM_csr_wmask;
+wire [31:0] MEM_csr_wvalue;
+wire [78:0] MEM_csr_access_b;
+
+// task 19
+wire [7:0] EX_to_MEM_exc_tlb;
+wire [7:0] MEM_to_WB_exc_tlb;
+
+assign {EX_to_MEM_exc_tlb,
+        EX_to_MEM_tlb_bus,
+        MEM_res_from_mem,
         MEM_gr_we       ,
         MEM_dest        ,
         MEM_alu_result  ,
@@ -56,14 +81,17 @@ assign {MEM_res_from_mem,
         MEM_req
 } = EX_to_MEM_bus_reg;
 assign MEM_exc_now = MEM_exc_last;
-assign MEM_to_WB_bus = {MEM_gr_we       , 
-                       MEM_dest        ,  
-                       MEM_final_result, 
-                       MEM_pc,
-					   MEM_exc_now,
-					   MEM_csr_access,
-					   MEM_ertn_flush,
-					   MEM_res_from_csr
+assign MEM_to_WB_bus = {MEM_alu_result,
+                        MEM_to_WB_exc_tlb,
+                        MEM_to_WB_tlb_bus,
+                        MEM_gr_we       , 
+                        MEM_dest        ,  
+                        MEM_final_result, 
+                        MEM_pc,
+                        MEM_exc_now,
+                        MEM_csr_access,
+                        MEM_ertn_flush,
+                        MEM_res_from_csr
                       };
 assign MEM_to_ID_forward = {MEM_gr_we,
                          MEM_to_ID_dest,
@@ -72,7 +100,7 @@ assign MEM_to_ID_forward = {MEM_gr_we,
                          data_ok_mem_id
                         };
 //不是load应该直接走，是就等数据返回，但防止store乱了，所以store也一起等
-assign MEM_ready_go    = ~MEM_req | (MEM_req & data_sram_data_ok);
+assign MEM_ready_go    = (~MEM_req | (MEM_req & data_sram_data_ok));
 assign MEM_allow     = !MEM_valid || MEM_ready_go && WB_allow;
 assign MEM_to_WB_valid = MEM_valid && MEM_ready_go;
 always @(posedge clk) begin
@@ -111,6 +139,15 @@ assign mem_result       = (MEM_is_ld_b)  ? ({{24{load_res[7]}}, load_res[7:0]}) 
 assign MEM_final_result = MEM_res_from_mem ? mem_result : MEM_alu_result;
 //load而且成功返回数据，告诉id不用阻塞了
 assign data_ok_mem_id = MEM_req && data_sram_data_ok;
+
+// task 18
+assign {MEM_refetch_flag, inst_tlbsrch, inst_tlbrd, inst_tlbwr, inst_tlbfill, tlbsrch_found, tlbsrch_idxgot} = EX_to_MEM_tlb_bus;
+assign MEM_to_WB_tlb_bus = EX_to_MEM_tlb_bus;
+assign MEM_csr_access_b = {MEM_csr_access[79:66], MEM_csr_access[64:0]};
+assign {MEM_csr_num, MEM_csr_we, MEM_csr_wvalue, MEM_csr_wmask} = MEM_csr_access_b;
+assign MEM_tlb_stall_bus = {inst_tlbrd & MEM_valid, MEM_csr_we & MEM_valid, MEM_csr_num};
+// task 19
+assign MEM_to_WB_exc_tlb = EX_to_MEM_exc_tlb;
 
 
 endmodule

@@ -14,7 +14,9 @@ module id_stage(
     input  wire [`MEM_BYPASS_LEN-1:0] MEM_to_ID_forward,
     input  wire [`EX_BYPASS_LEN-1:0] EX_to_ID_forward,
     input  wire [`WB_BYPASS_LEN-1:0] WB_to_ID_forward,
-	input  wire has_int
+	input  wire has_int,
+    input  wire [15:0] EX_tlb_stall_bus,
+    input  wire [15:0] MEM_tlb_stall_bus
 );
 
 wire        br_taken;
@@ -115,6 +117,28 @@ wire inst_break;
 wire inst_rdcntvl_w;
 wire inst_rdcntvh_w;
 wire inst_rdcntid;
+
+// task 18
+wire        inst_tlbsrch;
+wire        inst_tlbrd;
+wire        inst_tlbwr;
+wire        inst_tlbfill;
+wire        inst_invtlb;
+wire [ 4:0] invtlb_op;
+wire        id_refetch_flag;
+wire [10:0] ID_tlb_bus;
+wire        es_tlb_stall;
+wire        es_inst_tlbrd;
+wire [13:0] es_csr_num;
+wire        es_csr_we;
+wire        ms_tlb_stall;
+wire        ms_inst_tlbrd;
+wire [13:0] ms_csr_num;
+wire        ms_csr_we;
+wire        tlb_stall;
+
+// task 19
+wire [7:0] ID_exc_tlb;
 
 wire        need_ui5;
 wire 		need_ui12;
@@ -248,6 +272,14 @@ assign inst_rdcntvl_w   = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h0
 assign inst_rdcntvh_w   = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h0] & op_19_15_d[5'h00] & (rk ==5'h19) & ~(|rj);
 assign inst_rdcntid     = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h0] & op_19_15_d[5'h00] & (rk ==5'h18) & ~(|rd);
 
+// task 18 tlb insts
+assign inst_tlbsrch = op_31_26_d[6'h01] & op_25_22_d[4'h9] & op_21_20_d[2'h0] & op_19_15_d[5'h10] & rk == 5'h0a;
+assign inst_tlbrd   = op_31_26_d[6'h01] & op_25_22_d[4'h9] & op_21_20_d[2'h0] & op_19_15_d[5'h10] & rk == 5'h0b;
+assign inst_tlbwr   = op_31_26_d[6'h01] & op_25_22_d[4'h9] & op_21_20_d[2'h0] & op_19_15_d[5'h10] & rk == 5'h0c;
+assign inst_tlbfill = op_31_26_d[6'h01] & op_25_22_d[4'h9] & op_21_20_d[2'h0] & op_19_15_d[5'h10] & rk == 5'h0d;
+assign inst_invtlb  = op_31_26_d[6'h01] & op_25_22_d[4'h9] & op_21_20_d[2'h0] & op_19_15_d[5'h13];
+
+
 assign alu_op[ 0] = inst_add_w | inst_addi_w | inst_ld_w | inst_st_w | inst_st_b | inst_st_h
                     | inst_jirl | inst_bl |inst_pcaddu12i | inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_st_b | inst_st_h; 
 assign alu_op[ 1] = inst_sub_w;
@@ -276,6 +308,7 @@ wire is_ld_hu = inst_ld_hu;
 wire is_st_b = inst_st_b;
 wire is_st_h = inst_st_h;
 wire is_st_w = inst_st_w;
+wire is_tlb = inst_tlbfill || inst_tlbrd || inst_tlbsrch || inst_tlbwr || inst_invtlb && invtlb_op < 5'h07;
 
 
 assign need_ui5   =  inst_slli_w | inst_srli_w | inst_srai_w;
@@ -334,7 +367,8 @@ assign res_from_mem  = inst_ld_w |
 assign dst_is_r1     = inst_bl;
 //是否写寄存器
 assign gr_we         = ~inst_st_w & ~inst_st_b & ~inst_st_h & ~inst_beq & ~inst_bne & ~inst_b & ~inst_blt 
-					& ~inst_bge & ~inst_bltu & ~inst_bgeu & ~inst_syscall & ~inst_ertn & ~inst_break; 
+					 & ~inst_bge & ~inst_bltu & ~inst_bgeu & ~inst_syscall & ~inst_ertn & ~inst_break
+                     & ~inst_tlbsrch & ~inst_tlbrd & ~inst_tlbwr & ~inst_tlbfill & ~inst_invtlb;
 //是store指令
 assign mem_we        = inst_st_w | inst_st_b | inst_st_h;
 assign dest          = dst_is_r1 ? 5'd1 :
@@ -421,13 +455,14 @@ wire is_break = inst_break;
 wire ertn_flush = inst_ertn;
 
 wire [79:0]csr_access = {csr_num, csr_re, csr_we, csr_wvalue, csr_wmask};
-
+// {14, 1, 65} = 80
 
 assign ID_to_IF_bus = {br_stall, br_taken, br_target};
 
 reg  [`IF2ID_BUS_LEN -1:0] IF_to_ID_bus_reg;
 
-assign {exc_last,
+assign {ID_exc_tlb,
+        exc_last,
 		ID_inst,
         ID_pc  } = IF_to_ID_bus_reg;
 
@@ -445,7 +480,7 @@ wire inst_valid = inst_add_w   | inst_sub_w   | inst_slt    | inst_sltu  |
                   inst_ld_b    | inst_ld_h    | inst_ld_bu  | inst_ld_hu  |
                   inst_st_b    | inst_st_h    | inst_csrrd  | inst_csrwr |
                   inst_csrxchg | inst_ertn    | inst_syscall | inst_break |
-                  inst_rdcntvl_w | inst_rdcntvh_w | inst_rdcntid;
+                  inst_rdcntvl_w | inst_rdcntvh_w | inst_rdcntid | is_tlb;
 wire exc_ine;
 assign exc_ine = ~inst_valid;
 wire [15:0] ID_exc_detected = { {(`EXC_WIDTH-`EXC_SYS-1){1'b0}}, is_sys, {`EXC_SYS{1'b0}} }
@@ -453,6 +488,40 @@ wire [15:0] ID_exc_detected = { {(`EXC_WIDTH-`EXC_SYS-1){1'b0}}, is_sys, {`EXC_S
                             | { {(`EXC_WIDTH-`EXC_INE-1){1'b0}}, exc_ine, {`EXC_INE{1'b0}} };
 assign exc_now = has_int? { {(`EXC_WIDTH-`EXC_INT-1){1'b0}}, has_int, {`EXC_INT{1'b0}} } & {`EXC_WIDTH{ID_valid}}:
 				(|exc_last) ? exc_last : ID_exc_detected;
+
+
+
+
+// task 18
+wire type_ld_st = inst_ld_b   | inst_ld_h   | inst_ld_w   | inst_ld_bu | inst_ld_hu  | inst_st_b  | inst_st_h   | inst_st_w;
+
+assign id_refetch_flag = inst_invtlb || inst_tlbrd || inst_tlbwr || inst_tlbfill 
+                         || (csr_we && (csr_num == `CSR_CRMD && (|csr_wmask[4:3]) || csr_num == `CSR_DMW0 || csr_num == `CSR_DMW1 || csr_num == `CSR_ASID));  // 当前指令造成下一条指令需要Refetch
+                        // 虚实转换需要读取CSR.ASID; CSR.CRMD; ID_csr_num == `CSR_DMW因此修改后必须Refetch
+assign ID_tlb_bus = {id_refetch_flag, inst_tlbsrch, inst_tlbrd, inst_tlbwr, inst_tlbfill, inst_invtlb, invtlb_op};
+assign invtlb_op = ID_inst[4:0];
+//tlb冲突，当exe,mem级有csr写入，进行阻塞
+assign {es_inst_tlbrd, es_csr_we, es_csr_num} = EX_tlb_stall_bus;
+assign {ms_inst_tlbrd, ms_csr_we, ms_csr_num} = MEM_tlb_stall_bus;
+assign tlb_stall = ms_tlb_stall || es_tlb_stall;
+assign es_tlb_stall = type_ld_st && (
+                                    es_inst_tlbrd ||
+                                    (es_csr_we && (es_csr_num == `CSR_ASID || es_csr_num == `CSR_CRMD || es_csr_num == `CSR_DMW0 || es_csr_num == `CSR_DMW1)) // 修改CSR.ASID或直接映射相关
+                    ) || inst_tlbsrch && (
+                                    es_inst_tlbrd || 
+                                    (es_csr_we && (es_csr_num == `CSR_ASID || es_csr_num == `CSR_TLBEHI))
+                );
+assign ms_tlb_stall = type_ld_st && (
+                                    ms_inst_tlbrd ||
+                                    (ms_csr_we && (ms_csr_num == `CSR_ASID || ms_csr_num == `CSR_CRMD || ms_csr_num == `CSR_DMW0 || ms_csr_num == `CSR_DMW1)) // 修改CSR.ASID或直接映射相关
+                    ) || inst_tlbsrch && (
+                                    ms_inst_tlbrd || 
+                                    (ms_csr_we && (ms_csr_num == `CSR_ASID || ms_csr_num == `CSR_TLBEHI))
+                );
+
+
+
+
 
 // assign exc_now = exc_last 	|{ {(`EXC_WIDTH-`EXC_INT-1){1'b0}}, has_int, {`EXC_INT{1'b0}} } & {`EXC_WIDTH{ID_valid}}
 // 							|{ {(`EXC_WIDTH-`EXC_SYS-1){1'b0}}, is_sys, {`EXC_SYS{1'b0}} }
@@ -465,7 +534,9 @@ assign {rf_we   ,
         rf_wdata   
        } = WB_to_ID_bus;
 
-assign ID_to_EX_bus = {alu_op       ,   
+assign ID_to_EX_bus = { ID_exc_tlb,
+                        ID_tlb_bus,
+                        alu_op       ,   
                        alu_src1     , 
                        alu_src2     , 
                        gr_we        ,   
@@ -490,6 +561,7 @@ assign ID_to_EX_bus = {alu_op       ,
 					   res_from_csr,
 					   inst_rdcntvl_w,
 					   inst_rdcntvh_w
+
 	};
 
 assign {EX_to_ID_we,
@@ -549,7 +621,9 @@ assign load_stall =
     ((WB_res_from_csr) &&
        (((rj == WB_to_ID_dest) && rj_wait) ||
         ((rk == WB_to_ID_dest) && rk_wait) ||
-        ((rd == WB_to_ID_dest) && rd_wait)));
+        ((rd == WB_to_ID_dest) && rd_wait))) ||
+    
+    tlb_stall;
 
 
 always @(posedge clk) begin
