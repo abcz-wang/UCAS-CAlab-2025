@@ -117,9 +117,12 @@ always @(*) begin
 			
 		end
 		DONE:begin
-			u_next_state = WAIT;
+			if(valid)
+				u_next_state = WAIT;
+			else
+				u_next_state = DONE;
 		end
-		default: u_next_state <= INIT;
+		default: u_next_state = INIT;
 	endcase
 end
 assign unsigned_divisor_tvalid = (u_current_state == WAIT) && is_div_mod_u;

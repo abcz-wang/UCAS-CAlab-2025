@@ -40,8 +40,8 @@ module mycpu_top(
     output wire                 wvalid    ,
     input wire                  wready    ,
     // write respond
-    input wire                  bid       ,
-    input wire                  bresp     ,
+    input wire   [3:0]           bid       ,
+    input wire   [1:0]           bresp     ,
     input wire                  bvalid    ,
     output wire                 bready    ,
     // trace debug interface
@@ -52,8 +52,23 @@ module mycpu_top(
 );
 
 
-reg         reset;
-always @(posedge aclk) reset <= ~aresetn;
+
+reg resetn_r1, resetn_r2;
+always @(posedge aclk or negedge aresetn) begin
+  if(!aresetn) begin
+    resetn_r1 <= 1'b0;
+    resetn_r2 <= 1'b0;
+  end else begin
+    resetn_r1 <= 1'b1;
+    resetn_r2 <= resetn_r1;
+  end
+end
+
+wire resetn_sync = resetn_r2;   // 低有效，异步拉低/同步释放
+wire reset_sync  = ~resetn_sync; // 高有效
+
+
+
 
 wire         ID_allow;
 wire         EX_allow;
@@ -165,7 +180,6 @@ wire [31:0] ertnentry_refetchtarget = ertn_flush ? era_pc : debug_wb_pc + 32'd4;
 wire                      inst_wb_tlbsrch;
 wire                      wb_tlbsrch_found;
 wire [               3:0]    wb_tlbsrch_idxgot;
-wire [               3:0]    csr_tlbidx_index;
 wire                      inst_wb_tlbrd;
 wire [15:0] EX_tlb_stall_bus;
 wire [15:0] MEM_tlb_stall_bus;
@@ -186,6 +200,20 @@ wire       exc_now_fetch;
 wire       wb_ex_e;
 
 
+wire [31:0] inst_addr_vrtl;
+wire        icache_rd_req;
+wire [ 2:0] icache_rd_type;
+wire [31:0] icache_rd_addr;
+wire        icache_rd_rdy;
+wire        icache_ret_valid;
+wire        icache_ret_last;
+wire [31:0] icache_ret_data;
+wire        icache_wr_req;
+wire [ 2:0] icache_wr_type;
+wire [31:0] icache_wr_addr;
+wire [ 3:0] icache_wr_strb;
+wire [127:0]icache_wr_data;
+wire        icache_wr_rdy=1'b0;
 
 wire inst_sram_req;
 wire inst_sram_wr;
@@ -213,7 +241,7 @@ wire[31:0] data_sram_rdata;
 reg [63:0]stable_counter;
 always @(posedge aclk ) 
 begin
-	if (reset)
+	if (reset_sync)
 		stable_counter <= 64'b0;
 	else 
 		stable_counter <= stable_counter + 1'b1;
@@ -221,7 +249,7 @@ end
 wire [63:0]glob_cnt = stable_counter ;
 csr my_csr(
 	.clk(aclk),
-	.reset(reset),
+	.reset(reset_sync),
 	.WB_csr_access(WB_csr_access),
 	.csr_rvalue(csr_rvalue),
 	.hw_int_in(hw_int_in),
@@ -258,8 +286,8 @@ csr my_csr(
 
     .w_tlb_e         (w_e),
     .w_tlb_ps        (w_ps),
-    .w_tlb_vppn      (w_vppn),
-    .w_tlb_asid      (w_asid),
+    .w_tlb_vppn      (tlbehi_vppn_fromCSR),
+    .w_tlb_asid      (asid_fromCSR),
     .w_tlb_g         (w_g),
     .w_tlb_ppn0      (w_ppn0),
     .w_tlb_plv0      (w_plv0),
@@ -289,7 +317,7 @@ csr my_csr(
 // IF stage
 if_stage if_stage(
     .clk            (aclk),
-    .reset          (reset),
+    .reset          (reset_sync),
     .ID_allow       (ID_allow),
     .ID_to_IF_bus   (ID_to_IF_bus),
     .IF_to_ID_valid (IF_to_ID_valid),
@@ -298,9 +326,6 @@ if_stage if_stage(
 	.ex_entry(ex_entry),
 	.ertn_flush(ertn_flush || wb_refetch_flush),
 	.era_pc(ertnentry_refetchtarget),
-    // inst sram interface
-    // .inst_sram_en   (inst_sram_en),
-    // .inst_sram_we   (inst_sram_we),
     .inst_sram_req  (inst_sram_req),
     .inst_sram_wr   (inst_sram_wr),
     .inst_sram_size (inst_sram_size),
@@ -327,12 +352,13 @@ if_stage if_stage(
     .csr_dmw0_plv3(csr_dmw0_plv3),
     .csr_dmw1_plv0(csr_dmw1_plv0),
     .csr_dmw1_plv3(csr_dmw1_plv3),
-    .csr_direct_addr(csr_direct_addr)
+    .csr_direct_addr(csr_direct_addr),
+    .inst_addr_vrtl(inst_addr_vrtl)
 );
 // ID stage
 id_stage id_stage(
     .clk            (aclk),
-    .reset          (reset||wb_ex||ertn_flush||wb_refetch_flush),
+    .reset          (reset_sync||wb_ex||ertn_flush||wb_refetch_flush),
     .EX_allow       (EX_allow),
     .ID_allow       (ID_allow),
     .IF_to_ID_valid (IF_to_ID_valid),
@@ -352,7 +378,7 @@ id_stage id_stage(
 // EX stage
 ex_stage ex_stage(
     .clk            (aclk),
-    .reset          (reset||wb_ex||ertn_flush||wb_refetch_flush),
+    .reset          (reset_sync||wb_ex||ertn_flush||wb_refetch_flush),
     .MEM_allow      (MEM_allow),
     .EX_allow       (EX_allow),
     .ID_to_EX_valid (ID_to_EX_valid),
@@ -364,9 +390,6 @@ ex_stage ex_stage(
 	.has_exc(has_exc),
 	.has_ertn(MEM_ertn_flush||ertn_flush||wb_refetch_flush),
 	.glob_cnt(glob_cnt),
-    // data sram interface
-    // .data_sram_en   (data_sram_en),
-    // .data_sram_we   (data_sram_we),
     .data_sram_req  (data_sram_req),
     .data_sram_wr   (data_sram_wr),
     .data_sram_size (data_sram_size),
@@ -407,7 +430,7 @@ ex_stage ex_stage(
 // MEM stage
 mem_stage mem_stage(
     .clk             (aclk),
-    .reset           (reset||wb_ex||ertn_flush||wb_refetch_flush),
+    .reset           (reset_sync||wb_ex||ertn_flush||wb_refetch_flush),
     .WB_allow        (WB_allow),
     .MEM_allow       (MEM_allow),
     .EX_to_MEM_valid (EX_to_MEM_valid),
@@ -423,7 +446,7 @@ mem_stage mem_stage(
 // WB stage
 wb_stage wb_stage(
     .clk                (aclk),
-    .reset              (reset||wb_ex||ertn_flush),
+    .reset              (reset_sync||wb_ex||ertn_flush),
     .WB_allow           (WB_allow),
     .MEM_to_WB_valid    (MEM_to_WB_valid),
     .MEM_to_WB_bus      (MEM_to_WB_bus),
@@ -453,7 +476,7 @@ wb_stage wb_stage(
 
 sram_axi_bridge sram_axi_bridge(
     .aclk               (aclk               ),
-    .aresetn            (aresetn            ),
+    .aresetn            (resetn_sync        ),
 
     .arid               (arid               ),
     .araddr             (araddr             ),
@@ -496,15 +519,13 @@ sram_axi_bridge sram_axi_bridge(
     .bresp              (bresp              ),
     .bready             (bready             ),
 
-    .inst_sram_req      (inst_sram_req      ),
-    .inst_sram_wr       (inst_sram_wr       ),
-    .inst_sram_size     (inst_sram_size     ),
-    .inst_sram_addr     (inst_sram_addr     ),
-    .inst_sram_wstrb    (inst_sram_wstrb    ),
-    .inst_sram_wdata    (inst_sram_wdata    ),
-    .inst_sram_addr_ok  (inst_sram_addr_ok  ),
-    .inst_sram_data_ok  (inst_sram_data_ok  ),
-    .inst_sram_rdata    (inst_sram_rdata    ),
+    .icache_rd_req      (icache_rd_req      ),
+    .icache_rd_type     (icache_rd_type     ),
+    .icache_rd_addr     (icache_rd_addr     ),
+    .icache_rd_rdy      (icache_rd_rdy      ),
+    .icache_ret_valid   (icache_ret_valid   ),
+    .icache_ret_last    (icache_ret_last    ),
+    .icache_ret_data    (icache_ret_data    ),
 
     .data_sram_req      (data_sram_req      ),
     .data_sram_wr       (data_sram_wr       ),
@@ -520,7 +541,7 @@ sram_axi_bridge sram_axi_bridge(
 
 tlb tlb(
     .clk        (aclk      ),
-    .resetn     (~reset    ),
+    .resetn     (resetn_sync    ),
 
     .s0_vppn    (s0_vppn   ),
     .s0_va_bit12(s0_va_bit12),
@@ -591,7 +612,35 @@ tlb tlb(
     .r_v1       (r_v1      )
 );
 
+cache Icache(
+    .clk    (aclk                       ),
+    .resetn (resetn_sync                ),
+    .valid  (inst_sram_req              ),
+    .op     (inst_sram_wr               ),
+    .index  (inst_addr_vrtl[11:4]       ),
+    .tag    (inst_sram_addr[31:12]      ),
+    .offset (inst_addr_vrtl[3:0]        ),
+    .wstrb  (inst_sram_wstrb            ),
+    .wdata  (inst_sram_wdata            ),
+    .addr_ok(inst_sram_addr_ok          ),  
+    .data_ok(inst_sram_data_ok          ),
+    .rdata  (inst_sram_rdata            ),
 
+    .rd_req (icache_rd_req              ),
+    .rd_type(icache_rd_type             ),
+    .rd_addr(icache_rd_addr             ),
+    .rd_rdy   (icache_rd_rdy            ),
+    .ret_valid(icache_ret_valid         ),
+    .ret_last (icache_ret_last          ),
+    .ret_data (icache_ret_data          ),
+
+    .wr_req (icache_wr_req              ),
+    .wr_type(icache_wr_type             ),
+    .wr_addr(icache_wr_addr             ),
+    .wr_wstrb(icache_wr_strb             ),
+    .wr_data(icache_wr_data             ),
+    .wr_rdy (icache_wr_rdy              )
+);
 
 
 

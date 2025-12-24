@@ -44,15 +44,14 @@ module sram_axi_bridge(
     input      wire         	bvalid,
     output    wire          	bready,
     // inst sram interface
-    input    wire           	inst_sram_req,
-    input    wire           	inst_sram_wr,
-    input   wire	[ 1:0]      inst_sram_size,
-    input   wire	[31:0]      inst_sram_addr,
-    input  wire 	[ 3:0]      inst_sram_wstrb,
-    input   wire	[31:0]      inst_sram_wdata,
-    output   wire           inst_sram_addr_ok,
-    output   wire           inst_sram_data_ok,
-    output wire [31:0]      inst_sram_rdata,
+    // icache rd interface
+    input  wire             	icache_rd_req,
+    input  wire 	[ 2:0]      icache_rd_type,
+    input  wire 	[31:0]      icache_rd_addr,
+    output  wire            	icache_rd_rdy,		
+    output   wire           	icache_ret_valid,	
+	output	wire				icache_ret_last,
+    output  wire	[31:0]      icache_ret_data,
     // data sram interface
     input   wire            	data_sram_req,
     input   wire            	data_sram_wr,
@@ -75,8 +74,7 @@ localparam AR_INIT       = 3'b001,  // 初始状态：等待读请求
 reg [2:0]       ar_state;
 reg [2:0]       ar_next_state;
 reg [31:0]      ar_addr_reg;
-//wire            ar_stall;
-
+reg [7:0]       arlen_reg;
 always @(posedge aclk) begin
     if (~aresetn)
         ar_state <= AR_INIT;
@@ -86,12 +84,10 @@ end
 always @(*) begin
     case (ar_state)
         AR_INIT: begin
-//            if(ar_stall)
- //               ar_next_state = AR_INIT;
             //data和inst请求同时来的时候，data优先
             if (data_sram_req && ~data_sram_wr) 
                 ar_next_state = AR_DATA;
-            else if (inst_sram_req && ~inst_sram_wr)
+            else if (icache_rd_req)
                 ar_next_state = AR_INST;
             else
                 ar_next_state = AR_INIT;
@@ -118,25 +114,27 @@ always @(posedge aclk) begin
     if (!aresetn) begin
         arid <= 4'b0;
         ar_addr_reg <= 32'b0;
+        arlen_reg <= 8'b0;
     end 
-    // 仅初始态更新（避免重复锁存）
+    // 仅初始态更新（避免重复锁存
     else if (ar_state == AR_INIT) begin
         if (data_sram_req && ~data_sram_wr) begin
             ar_addr_reg <= data_sram_addr;
             arid <= 4'b0001;
-        end else if (inst_sram_req &&~inst_sram_wr) begin
-            ar_addr_reg <= inst_sram_addr;
+            arlen_reg <= 8'b0;
+        end else if (icache_rd_req) begin
+            ar_addr_reg <= icache_rd_addr;
             arid <= 4'b0000;
+            arlen_reg <= 8'b11;
         end
     end
 end
-//assign ar_stall = (aw_state != AW_INIT) && (b_state != B_END) && (awaddr == araddr);
+
 assign araddr = ar_addr_reg;
-//addrok成功前，可以改地址，成功后，不能改，arvalid发出后，不能改地址，故如此设计
-assign inst_sram_addr_ok = (ar_state == AR_INST);
-assign data_sram_addr_ok = (ar_state == AR_DATA) || (aw_state == AW_ADDR_READY);
+assign icache_rd_rdy = arready && (arid == 4'b0000);
+assign data_sram_addr_ok = arvalid && arready && (arid == 4'b0001) || b_state == B_DATA_READY ;
 assign arvalid = (ar_state == AR_INST) || (ar_state == AR_DATA);
-assign arlen = 8'b0;
+assign arlen = arlen_reg;
 assign arburst = 2'b01;
 assign arlock = 2'b0;
 assign arcache = 4'b0;
@@ -150,7 +148,7 @@ always @(posedge aclk) begin
     if (!aresetn)
         ar_counter_reg <= 2'b0;
     else 
-        ar_counter_reg <= ar_counter_reg+ (arvalid && arready ? 1'b1 : 1'b0) - (rvalid && rready ? 1'b1 : 1'b0);
+        ar_counter_reg <= ar_counter_reg+ (arvalid && arready ? 1'b1 : 1'b0) - (rvalid && rready && rlast ? 1'b1 : 1'b0);
 
 end
 
@@ -162,6 +160,9 @@ reg [2:0]       r_state;
 reg [2:0]       r_next_state;
 reg [31:0]      r_rdata_reg;
 reg [3:0]       r_rid_reg;
+reg        icache_ret_valid_r;
+reg [31:0] icache_ret_data_r;
+reg        icache_ret_last_r;
 always @(posedge aclk) begin
     if (!aresetn)
         r_state <= R_INIT;
@@ -180,7 +181,7 @@ always @(*) begin
         end
         // 数据接收态：等待 AXI 读数据握手（rvalid && rready），完成后进入读完成态
         R_DATA: begin
-            if (rvalid && rready)
+            if (rvalid && rready && rlast)
                 r_next_state = R_DATA_OVER;
             else
                 r_next_state = R_DATA;
@@ -202,22 +203,40 @@ always @(posedge aclk)  begin
         r_rdata_reg <= rdata;
     end
 end	
-assign inst_sram_rdata = (r_rid_reg == 4'b0000) ? r_rdata_reg : 32'b0;
+
+always @(posedge aclk) begin
+  if(!aresetn) begin
+    icache_ret_valid_r <= 1'b0;
+    icache_ret_data_r  <= 32'b0;
+    icache_ret_last_r  <= 1'b0;
+  end else begin
+    icache_ret_valid_r <= (rvalid && rready && (rid == 4'b0000));
+    if(rvalid && rready && (rid == 4'b0000)) begin
+      icache_ret_data_r <= rdata;
+      icache_ret_last_r <= rlast;   
+    end else begin
+      icache_ret_last_r <= 1'b0;
+    end
+  end
+end
+
+
 assign data_sram_rdata = (r_rid_reg == 4'b0001) ? r_rdata_reg : 32'b0;
 assign rready = (r_state == R_DATA);
-//指令读数据就绪：读完成状态（R_DATA_OVER）+ ID=0000（指令读）
-assign inst_sram_data_ok = (r_state == R_DATA_OVER) && (r_rid_reg == 4'b0000);
-//数据读数据就绪：读完成状态（R_DATA_OVER）+ ID=0001（数据读） 或者写完成状态（B_DATA_END）
 assign data_sram_data_ok = ((r_state == R_DATA_OVER) && (r_rid_reg == 4'b0001)) || (b_state == B_DATA_END);
-
+assign icache_ret_valid = icache_ret_valid_r;
+assign icache_ret_data  = icache_ret_data_r;
+assign icache_ret_last  = icache_ret_last_r;
 
 
 //第三部分：aw通道
-localparam AW_INIT       = 3'b001,
-           AW_ADDR_READY = 3'b010,
-           AW_DATA_READY = 3'b100;
-reg [2:0]       aw_state;
-reg [2:0]       aw_next_state;
+localparam AW_INIT       = 5'b00001,
+           AW_ADDR_READY = 5'b00100,
+           AW_DATA_READY = 5'b01000,
+           AW_NO_READY   = 5'b00010,
+           AW_END_READY  = 5'b10000;
+reg [4:0]       aw_state;
+reg [4:0]       aw_next_state;
 reg [31:0]      aw_addr_reg;
 reg [31:0]       aw_data_reg;
 reg [3:0]        aw_wstrb_reg;
@@ -230,25 +249,38 @@ end
 always @(*) begin
     case (aw_state)
         AW_INIT: begin
-            // 初始态：仅当收到数据 SRAM 写请求（req=1 且 wr=1），进入写地址就绪态
             if (data_sram_req && data_sram_wr) 
-                aw_next_state = AW_ADDR_READY;
+                aw_next_state = AW_NO_READY;
             else
                 aw_next_state = AW_INIT;
         end
-        AW_ADDR_READY: begin
-            // 写地址就绪态：等待 AW 通道握手（awvalid && awready），完成后进入写数据就绪态
-            if (awvalid && awready)
+        AW_NO_READY: begin
+            if (awvalid && awready && wvalid && wready)
+                aw_next_state =  AW_END_READY;
+            else if (awvalid && awready)
                 aw_next_state = AW_DATA_READY;
+            else if (wvalid && wready)
+                aw_next_state = AW_ADDR_READY;
+            else
+                aw_next_state = AW_NO_READY;
+        end
+        AW_ADDR_READY: begin
+            if (awvalid && awready)
+                aw_next_state =  AW_END_READY;
             else
                 aw_next_state = AW_ADDR_READY;
         end
         AW_DATA_READY: begin
-            // 写数据就绪态：等待 W 通道握手（wvalid && wready），完成后回到初始态
             if (wvalid && wready)
-                aw_next_state = AW_INIT;
+                aw_next_state =  AW_END_READY;
             else
                 aw_next_state = AW_DATA_READY;
+                end
+        AW_END_READY: begin
+            if (bvalid && bready)
+                aw_next_state =  AW_INIT;
+            else
+                aw_next_state = AW_END_READY;
         end
         default: aw_next_state = AW_INIT;
     endcase
@@ -259,6 +291,7 @@ always @(posedge aclk) begin
         aw_addr_reg <= 32'b0;
         aw_data_reg <= 32'b0;
         aw_wstrb_reg <= 4'b0;
+        awsize <= 3'b0;
     end 
     else if (aw_state == AW_INIT) begin
         if (data_sram_req && data_sram_wr) begin
@@ -266,14 +299,15 @@ always @(posedge aclk) begin
             aw_addr_reg <= data_sram_addr;
             aw_data_reg <= data_sram_wdata;
             aw_wstrb_reg <= data_sram_wstrb;
+            awsize <= {1'b0, data_sram_size};
         end 
     end
 end
 
 
 
-assign awvalid = (aw_state == AW_ADDR_READY);
-assign wvalid = (aw_state == AW_DATA_READY);
+assign awvalid = (aw_state == AW_ADDR_READY) || (aw_state == AW_NO_READY);
+assign wvalid = (aw_state == AW_DATA_READY) || (aw_state == AW_NO_READY);
 assign awid = 4'b1;
 assign awlen = 8'b0;
 assign awburst = 2'b01;
@@ -305,13 +339,14 @@ always @(*) begin
         B_INIT: begin
             // 1. aw_state == AW_DATA_READY：当前处于 W 通道数据传输状态（确保是写操作流程）
             // 2. wvalid && wready：W 通道握手成功（写数据已被从设备接收）
-            if (aw_state == AW_DATA_READY && wvalid && wready) 
+            if (aw_state == AW_NO_READY && awvalid && awready && wvalid && wready ||
+            aw_state == AW_ADDR_READY && awvalid && awready || aw_state == AW_DATA_READY && wvalid && wready) 
                 b_next_state = B_DATA_READY;
             else
                 b_next_state = B_INIT;
         end
         B_DATA_READY: begin
-             // 响应接收态：等待 B 通道握手（bvalid && bready），完成后进入响应完成态
+            // 响应接收态：等待 B 通道握手（bvalid && bready），完成后进入响应完成态
             if (bvalid && bready)
                 b_next_state = B_DATA_END;
             else
@@ -324,7 +359,7 @@ always @(*) begin
         default: b_next_state = B_INIT;
     endcase
 end
-assign bready = (b_state == B_DATA_READY);
+assign bready = aw_state == AW_END_READY;
 endmodule
            
 

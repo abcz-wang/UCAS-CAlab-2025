@@ -129,7 +129,7 @@ assign WB_ready_go = 1'b1;
 assign WB_allow  = !WB_valid || WB_ready_go;
 
 always @(posedge clk) begin
-    if (reset) begin
+    if (reset || WB_refetch_flush) begin
         WB_valid <= 1'b0;
         MEM_to_WB_bus_reg <= {`MEM2WB_BUS_LEN{1'b0}};
     end
@@ -140,6 +140,25 @@ always @(posedge clk) begin
     end
 end
 
+// always @(posedge clk) begin
+//     if (reset) begin
+//         MEM_to_WB_bus_reg <= {`MEM2WB_BUS_LEN{1'b0}};
+//     end
+//     else if (WB_allow) begin
+//         if (MEM_to_WB_valid)
+//             MEM_to_WB_bus_reg <= MEM_to_WB_bus;
+//     end
+    
+// end
+
+// always @(posedge clk) begin
+//     if (reset || WB_refetch_flush) begin
+//         WB_valid <= 1'b0;
+//     end
+//     else if (WB_allow) begin
+//         WB_valid <= MEM_to_WB_valid;
+//     end
+// end
 
 
 assign rf_we    = WB_gr_we && WB_valid && ~wb_ex;

@@ -131,7 +131,7 @@ wire        es_tlb_stall;
 wire        es_inst_tlbrd;
 wire [13:0] es_csr_num;
 wire        es_csr_we;
-wire        ms_tlb_stall;
+wire        ms_tlb_blk;
 wire        ms_inst_tlbrd;
 wire [13:0] ms_csr_num;
 wire        ms_csr_we;
@@ -299,7 +299,7 @@ assign alu_op[14]  = inst_mulh_wu;
 
 wire is_div_mod_s = inst_div_w | inst_mod_w ;
 wire is_div_mod_u = inst_div_wu | inst_mod_wu;
-wire div_or_mod = inst_div_w | inst_div_wu;//若为除法，置为1，否则为mod,置为0
+wire div_or_mod = inst_div_w | inst_div_wu;//若为除法，置�?1，否则为mod,置为0
 
 wire is_ld_b = inst_ld_b;
 wire is_ld_h = inst_ld_h;
@@ -503,17 +503,17 @@ assign invtlb_op = ID_inst[4:0];
 //tlb冲突，当exe,mem级有csr写入，进行阻塞
 assign {es_inst_tlbrd, es_csr_we, es_csr_num} = EX_tlb_stall_bus;
 assign {ms_inst_tlbrd, ms_csr_we, ms_csr_num} = MEM_tlb_stall_bus;
-assign tlb_stall = ms_tlb_stall || es_tlb_stall;
+assign tlb_stall = ms_tlb_blk || es_tlb_stall;
 assign es_tlb_stall = type_ld_st && (
                                     es_inst_tlbrd ||
-                                    (es_csr_we && (es_csr_num == `CSR_ASID || es_csr_num == `CSR_CRMD || es_csr_num == `CSR_DMW0 || es_csr_num == `CSR_DMW1)) // 修改CSR.ASID或直接映射相关
+                                    (es_csr_we && (es_csr_num == `CSR_ASID || es_csr_num == `CSR_CRMD || es_csr_num == `CSR_DMW0 || es_csr_num == `CSR_DMW1)) // 修改CSR.ASID或直接映射相�?
                     ) || inst_tlbsrch && (
                                     es_inst_tlbrd || 
                                     (es_csr_we && (es_csr_num == `CSR_ASID || es_csr_num == `CSR_TLBEHI))
                 );
-assign ms_tlb_stall = type_ld_st && (
+assign ms_tlb_blk = type_ld_st && (
                                     ms_inst_tlbrd ||
-                                    (ms_csr_we && (ms_csr_num == `CSR_ASID || ms_csr_num == `CSR_CRMD || ms_csr_num == `CSR_DMW0 || ms_csr_num == `CSR_DMW1)) // 修改CSR.ASID或直接映射相关
+                                    (ms_csr_we && (ms_csr_num == `CSR_ASID || ms_csr_num == `CSR_CRMD || ms_csr_num == `CSR_DMW0 || ms_csr_num == `CSR_DMW1)) // 修改CSR.ASID或直接映射相�?
                     ) || inst_tlbsrch && (
                                     ms_inst_tlbrd || 
                                     (ms_csr_we && (ms_csr_num == `CSR_ASID || ms_csr_num == `CSR_TLBEHI))

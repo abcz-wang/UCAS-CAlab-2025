@@ -42,7 +42,8 @@ module if_stage(
     input  wire        csr_dmw1_plv3,
     input  wire [ 2:0] csr_dmw1_pseg,
     input  wire [ 2:0] csr_dmw1_vseg,
-    input  wire        csr_direct_addr
+    input  wire        csr_direct_addr,
+    output wire [31:0]  inst_addr_vrtl
 );
 wire         br_taken;
 wire [ 31:0] br_target;
@@ -58,7 +59,7 @@ wire [31:0]  seq_pc;
 //wire [31:0]  nextpc;
 wire [31:0] nextpc_vrtl;
 wire [31:0] nextpc_phy;
-
+assign inst_addr_vrtl =nextpc_vrtl;
 wire [`EXC_WIDTH-1:0]exc_last;
 wire [`EXC_WIDTH-1:0]exc_now;
 reg wb_ex_r;
@@ -111,7 +112,7 @@ assign nextpc_vrtl  = wb_ex_r? ex_entry_r: wb_ex? ex_entry:
                       br_taken_r? br_target_r: br_taken ? br_target : seq_pc;
 
 // IF stage
-//此时dataok到来，或者有有效的缓存指令，而且不需要丢弃当前指令                   
+//此时dataok到来，或者有有效的缓存指令，而且不需要丢弃当前指令                
 assign IF_ready_go = ~br_taken && (~discard_inst) && ((save_inst != 0) || inst_sram_data_ok); 
 assign IF_allow     = !IF_valid || IF_ready_go && ID_allow;  
 //后一半是同一拍地址与数据握手成功，好像不会发生
@@ -150,7 +151,7 @@ always @(posedge clk) begin
         br_target_r <= br_target;
         br_taken_r <= 1'b1;
     end
-    else if(inst_sram_addr_ok && ~discard_inst) begin
+    else if(inst_sram_addr_ok ) begin
         {wb_ex_r, ertn_flush_r, br_taken_r} <= 3'b0;
     end
 end
@@ -158,9 +159,9 @@ end
 always @(posedge clk) begin
     if(reset)
         discard_inst <= 1'b0;
-    else if((wb_ex || ertn_flush || br_taken || br_stall) && pre_IF_ready_go)
+    else if((wb_ex || ertn_flush || br_taken ) && pre_IF_ready_go)
         discard_inst <= 1'b1;
-    else if(~IF_allow && (wb_ex || ertn_flush || br_taken || br_stall) && ~IF_ready_go)
+    else if(~IF_allow && (wb_ex || ertn_flush || br_taken) && ~IF_ready_go)
         discard_inst <= 1'b1;
     else if(inst_sram_data_ok)
         discard_inst <= 1'b0;
@@ -187,16 +188,16 @@ end
 //req的reg寄存器，防止连续请求
 always @(posedge clk) begin
     if(reset)
-        inst_sram_req_reg <= 1'b1;
-    else if(inst_sram_req && inst_sram_addr_ok)
         inst_sram_req_reg <= 1'b0;
-    else if(inst_sram_data_ok)
+    else if(inst_sram_req && inst_sram_addr_ok)
         inst_sram_req_reg <= 1'b1;
+    else if(inst_sram_data_ok)
+        inst_sram_req_reg <= 1'b0;
 end
-//wire inst_sram_req_reg_r = inst_sram_req_reg & ~inst_sram_data_ok;
+wire inst_sram_req_reg_r = inst_sram_req_reg & ~inst_sram_data_ok;
 assign IF_inst         = (save_inst == 0) ? inst_sram_rdata : save_inst;
 assign inst_sram_req = (((IF_allow||(br_taken||br_taken_r))  && ~br_stall) 
-                        ||(wb_ex || wb_ex_r)||(ertn_flush || ertn_flush_r)) && ~reset && (inst_sram_req_reg ) ; 
+                        ||(wb_ex || wb_ex_r)||(ertn_flush || ertn_flush_r)) && ~reset && (~inst_sram_req_reg_r ) ; 
 assign inst_sram_wr    = 4'b0;   
 assign inst_sram_wstrb = 4'b0;   
 assign inst_sram_addr  = nextpc_phy;

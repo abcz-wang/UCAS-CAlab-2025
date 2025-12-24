@@ -3,8 +3,8 @@ module ex_stage(
     input        wire                   clk           ,
     input         wire                  reset         ,
     input          wire                 MEM_allow    ,
-    output        wire                  EX_allow    ,
-    input         wire                  ID_to_EX_valid,
+    (*mark_debug = "true"*)output        wire                  EX_allow    ,
+    (*mark_debug = "true"*)input         wire                  ID_to_EX_valid,
     input  wire [`ID2EX_BUS_LEN -1:0] ID_to_EX_bus  ,
     output          wire                EX_to_MEM_valid,
     output wire [`EX2MEM_BUS_LEN-1:0] EX_to_MEM_bus  ,
@@ -73,18 +73,18 @@ wire        EX_gr_we;
 wire        EX_mem_we;
 wire [4: 0] EX_dest;
 wire [31:0] EX_rkd_value;
-wire [31:0] EX_pc;
-wire [31:0] EX_alu_src1   ;
-wire [31:0] EX_alu_src2   ;
+(*mark_debug = "true"*)wire [31:0] EX_pc;
+(*mark_debug = "true"*)wire [31:0] EX_alu_src1   ;
+(*mark_debug = "true"*)wire [31:0] EX_alu_src2   ;
 wire [31:0] alu_result ;
 wire [31:0] ex_final_result ;
-wire [31:0]div_result;
-wire div_done;
+(*mark_debug = "true"*)wire [31:0]div_result;
+(*mark_debug = "true"*)wire div_done;
 wire is_div;
 wire [4:0] EX_to_ID_dest;
-wire EX_is_div_mod_s;
-wire EX_is_div_mod_u;
-wire EX_div_or_mod;
+(*mark_debug = "true"*)wire EX_is_div_mod_s;
+(*mark_debug = "true"*)wire EX_is_div_mod_u;
+(*mark_debug = "true"*)wire EX_div_or_mod;
 wire EX_is_ld_b;
 wire EX_is_ld_h;
 wire EX_is_ld_bu;
@@ -273,7 +273,7 @@ assign data_sram_wr     =   EX_mem_we;
 //基本上是data_sram_en的复用，现在loadstore都是精确异常
 assign EX_to_MEM_req = ((EX_mem_we | EX_res_from_mem) & EX_valid & ~has_ertn & ~exc_ale & ~EX_has_exc);
 assign data_sram_req    = ((EX_mem_we | EX_res_from_mem) & EX_valid & ~has_ertn & ~exc_ale & ~EX_has_exc) & MEM_allow;
-// assign data_sram_we    = {4{EX_mem_we && EX_valid && ~EX_has_exc}} & write_strb;
+// assign data_sram_we    = {4{EX_mem_we && EX_valid && ~EX_has_exc}} & write_strb;x
 assign data_sram_addr  = phy_addr;
 assign data_sram_wdata = EX_is_st_b ? {4{EX_rkd_value[7:0]}} :
                          EX_is_st_h ? {2{EX_rkd_value[15:0]}} :
@@ -283,7 +283,7 @@ assign data_sram_wdata = EX_is_st_b ? {4{EX_rkd_value[7:0]}} :
 assign {EX_refetch_flag, inst_tlbsrch, inst_tlbrd, inst_tlbwr, inst_tlbfill, inst_invtlb, invtlb_op} = EX_tlb_bus;
 assign {s1_vppn, s1_va_bit12} = inst_invtlb ? EX_rkd_value[31:12] :
                                 inst_tlbsrch ? {tlbehi_vppn_fromCSR, 1'b0} :
-                                alu_result[31:12]; // Normal Load/Store translation
+                                alu_result[31:12]; // Normal Load/Store translation, RESERVED for exp19
 
 assign s1_asid       = inst_invtlb ?  EX_alu_src1[9:0] : asid_fromCSR; // alu src1 is rj value
 assign EX_to_MEM_tlb_bus = {EX_refetch_flag, inst_tlbsrch, inst_tlbrd, inst_tlbwr, inst_tlbfill, s1_found, s1_index};
@@ -297,7 +297,7 @@ assign dmw0_hit  = (vtl_addr[31:29] == csr_dmw0_vseg) & (crmd_plv_fromCSR == 2'd
 assign dmw1_hit  = (vtl_addr[31:29] == csr_dmw1_vseg) & (crmd_plv_fromCSR == 2'd0 & csr_dmw1_plv0 | crmd_plv_fromCSR == 2'd3 & csr_dmw1_plv3);
 assign dmw0_paddr = {csr_dmw0_pseg, vtl_addr[28:0]};
 assign dmw1_paddr = {csr_dmw1_pseg, vtl_addr[28:0]};
-assign tlb_paddr  = (s1_ps == 6'd22) ? {s1_ppn[19:10], vtl_addr[21:0]} : {s1_ppn, vtl_addr[11:0]}; // depends on page size
+assign tlb_paddr  = (s1_ps == 6'd21) ? {s1_ppn[19:10], vtl_addr[21:0]} : {s1_ppn, vtl_addr[11:0]}; // depends on page size
 assign phy_addr   = csr_direct_addr ? vtl_addr    :
                     dmw0_hit        ? dmw0_paddr  :
                     dmw1_hit        ? dmw1_paddr  :

@@ -137,7 +137,7 @@ assign mem_result       = (MEM_is_ld_b)  ? ({{24{load_res[7]}}, load_res[7:0]}) 
                           (MEM_is_ld_hu) ? ({16'b0, load_res[15:0]}) :
                           data_sram_rdata;
 assign MEM_final_result = MEM_res_from_mem ? mem_result : MEM_alu_result;
-//load而且成功返回数据，告诉id不用阻塞了
+//load而且成功返回数据，告诉id不用阻塞
 assign data_ok_mem_id = MEM_req && data_sram_data_ok;
 
 // task 18
