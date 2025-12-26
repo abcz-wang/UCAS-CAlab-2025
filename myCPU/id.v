@@ -299,7 +299,7 @@ assign alu_op[14]  = inst_mulh_wu;
 
 wire is_div_mod_s = inst_div_w | inst_mod_w ;
 wire is_div_mod_u = inst_div_wu | inst_mod_wu;
-wire div_or_mod = inst_div_w | inst_div_wu;//若为除法，置�?1，否则为mod,置为0
+wire div_or_mod = inst_div_w | inst_div_wu;//若为除法，置为1，否则为mod,置为0
 
 wire is_ld_b = inst_ld_b;
 wire is_ld_h = inst_ld_h;

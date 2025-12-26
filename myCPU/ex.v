@@ -3,8 +3,8 @@ module ex_stage(
     input        wire                   clk           ,
     input         wire                  reset         ,
     input          wire                 MEM_allow    ,
-    (*mark_debug = "true"*)output        wire                  EX_allow    ,
-    (*mark_debug = "true"*)input         wire                  ID_to_EX_valid,
+    output        wire                  EX_allow    ,
+    input         wire                  ID_to_EX_valid,
     input  wire [`ID2EX_BUS_LEN -1:0] ID_to_EX_bus  ,
     output          wire                EX_to_MEM_valid,
     output wire [`EX2MEM_BUS_LEN-1:0] EX_to_MEM_bus  ,
@@ -21,7 +21,7 @@ module ex_stage(
     output wire [31:0] data_sram_wdata,
     output wire [`EX_BYPASS_LEN-1:0] EX_to_ID_forward,
 	input wire has_exc,//MEM,WB级有异常指令，不写入mem
-	input wire has_ertn, //MEM,WB级是ertn,也不能写入mem,因为要清空流??
+	input wire has_ertn, //MEM,WB级是ertn,也不能写入mem,因为要清空流水线
 	input wire [63:0]glob_cnt,
     // task 18
     output wire [ 4:0] invtlb_op,
@@ -50,14 +50,19 @@ module ex_stage(
     input  wire        csr_dmw0_plv3,
     input  wire [ 2:0] csr_dmw0_pseg,
     input  wire [ 2:0] csr_dmw0_vseg,
+    input  wire [ 1:0] csr_dmw0_mat,
     // DMW1
     input  wire        csr_dmw1_plv0,
     input  wire        csr_dmw1_plv3,
     input  wire [ 2:0] csr_dmw1_pseg,
     input  wire [ 2:0] csr_dmw1_vseg,
+    input  wire [ 1:0] csr_dmw1_mat,
     // direct addr
     input  wire        csr_direct_addr,
-    input  wire        wb_ex_e
+    input  wire        wb_ex_e,
+    output wire [31:0] vtl_addr,
+    input wire [1:0]  csr_crmd_datm,
+    output wire [1:0] datm
 );
 
 reg         EX_valid      ;
@@ -73,18 +78,18 @@ wire        EX_gr_we;
 wire        EX_mem_we;
 wire [4: 0] EX_dest;
 wire [31:0] EX_rkd_value;
-(*mark_debug = "true"*)wire [31:0] EX_pc;
-(*mark_debug = "true"*)wire [31:0] EX_alu_src1   ;
-(*mark_debug = "true"*)wire [31:0] EX_alu_src2   ;
+wire [31:0] EX_pc;
+wire [31:0] EX_alu_src1   ;
+wire [31:0] EX_alu_src2   ;
 wire [31:0] alu_result ;
 wire [31:0] ex_final_result ;
-(*mark_debug = "true"*)wire [31:0]div_result;
-(*mark_debug = "true"*)wire div_done;
+wire [31:0]div_result;
+wire div_done;
 wire is_div;
 wire [4:0] EX_to_ID_dest;
-(*mark_debug = "true"*)wire EX_is_div_mod_s;
-(*mark_debug = "true"*)wire EX_is_div_mod_u;
-(*mark_debug = "true"*)wire EX_div_or_mod;
+wire EX_is_div_mod_s;
+wire EX_is_div_mod_u;
+wire EX_div_or_mod;
 wire EX_is_ld_b;
 wire EX_is_ld_h;
 wire EX_is_ld_bu;
@@ -313,5 +318,8 @@ assign EX_exc_tlb[`EARRAY_PIS ] = EX_valid & tlb_used & isStore & !EX_exc_tlb[`E
 assign EX_exc_tlb[`EARRAY_PPI_MEM] = EX_valid & tlb_used & (isLoad | isStore) & !EX_exc_tlb[`EARRAY_PIL] & !EX_exc_tlb[`EARRAY_PIS] & (crmd_plv_fromCSR > s1_plv) & !EX_exc_tlb[`EARRAY_TLBR_MEM];
 assign EX_exc_tlb[`EARRAY_PME ] = EX_valid & tlb_used & isStore & !EX_exc_tlb[`EARRAY_PPI_MEM] & !s1_d & !EX_exc_tlb[`EARRAY_PPI_MEM] & !s1_d;
 assign EX_to_MEM_exc_tlb = EX_tlb_exc | EX_exc_tlb;
-
+assign datm       = csr_direct_addr ? csr_crmd_datm :
+                    dmw0_hit        ? csr_dmw0_mat  :
+                    dmw1_hit        ? csr_dmw1_mat  :
+                                        s1_mat        ; 
 endmodule

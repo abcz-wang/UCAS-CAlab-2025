@@ -84,7 +84,8 @@ module csr(
     output reg  [2:0] csr_dmw1_vseg,
     output wire csr_direct_addr,
     output reg  [1:0]  csr_crmd_plv,
-    input  wire exc_now_fetch
+    input  wire exc_now_fetch,
+    output reg  [1:0]  csr_crmd_datm
 );
 wire csr_re;
 wire csr_we;
@@ -115,7 +116,6 @@ reg csr_crmd_ie;
 reg csr_crmd_da;
 reg csr_crmd_pg;
 reg [1:0] csr_crmd_datf;
-reg [1:0] csr_crmd_datm;
 //PRMD
 reg [1:0] csr_prmd_pplv;
 reg csr_prmd_pie;

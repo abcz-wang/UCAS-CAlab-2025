@@ -112,7 +112,7 @@ assign nextpc_vrtl  = wb_ex_r? ex_entry_r: wb_ex? ex_entry:
                       br_taken_r? br_target_r: br_taken ? br_target : seq_pc;
 
 // IF stage
-//此时dataok到来，或者有有效的缓存指令，而且不需要丢弃当前指令                
+//此时dataok到来，或者有有效的缓存指令，而且不需要丢弃当前指令 
 assign IF_ready_go = ~br_taken && (~discard_inst) && ((save_inst != 0) || inst_sram_data_ok); 
 assign IF_allow     = !IF_valid || IF_ready_go && ID_allow;  
 //后一半是同一拍地址与数据握手成功，好像不会发生
@@ -173,10 +173,10 @@ assign save_inst = save_inst_reg;
 always @(posedge clk) begin
     if(reset)
         save_inst_reg <= 0;
-    else if(IF_ready_go) begin
-        if(wb_ex || ertn_flush)
-            save_inst_reg <= 0;
-        else if(!ID_allow && save_inst_reg == 0)
+    else if((wb_ex || ertn_flush ||br_taken))
+        save_inst_reg <= 0;
+    else if(IF_ready_go ) begin
+        if(!ID_allow && save_inst_reg == 0)
             save_inst_reg <= inst_sram_rdata;
         else if(!ID_allow)
             save_inst_reg <= save_inst;
@@ -213,7 +213,7 @@ assign dmw1_hit  = (nextpc_vrtl[31:29] == csr_dmw1_vseg) && (crmd_plv_fromCSR ==
 assign dmw0_paddr = {csr_dmw0_pseg, nextpc_vrtl[28:0]};
 assign dmw1_paddr = {csr_dmw1_pseg, nextpc_vrtl[28:0]};
 // tlb phyaddr
-assign tlb_paddr  = (s0_ps == 6'd22) ? {s0_ppn[19:10], nextpc_vrtl[21:0]} : {s0_ppn, nextpc_vrtl[11:0]}; // 根据Page Size决定
+assign tlb_paddr  = (s0_ps == 6'd22) ? {s0_ppn[19:10], nextpc_vrtl[21:0]} : {s0_ppn, nextpc_vrtl[11:0]}; // ����Page Size����
 assign nextpc_phy = csr_direct_addr ? nextpc_vrtl :
                     dmw0_hit        ? dmw0_paddr  :
                     dmw1_hit        ? dmw1_paddr  :

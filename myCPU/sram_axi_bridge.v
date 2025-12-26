@@ -53,15 +53,21 @@ module sram_axi_bridge(
 	output	wire				icache_ret_last,
     output  wire	[31:0]      icache_ret_data,
     // data sram interface
-    input   wire            	data_sram_req,
-    input   wire            	data_sram_wr,
-    input   wire	[ 1:0]      data_sram_size,
-    input   wire	[31:0]      data_sram_addr,
-    input   wire	[31:0]      data_sram_wdata,
-    input   wire	[ 3:0]      data_sram_wstrb,
-    output  wire            data_sram_addr_ok,
-    output   wire           data_sram_data_ok,
-    output  wire[31:0]      data_sram_rdata
+    input  wire             	dcache_rd_req,
+    input  wire 	[ 2:0]      dcache_rd_type,
+    input  wire 	[31:0]      dcache_rd_addr,
+    output wire             	dcache_rd_rdy,
+    output wire             	dcache_ret_valid,
+	output wire					dcache_ret_last,
+    output wire 	[31:0]      dcache_ret_data,
+	// dcache wr interface
+	input  wire               	dcache_wr_req,
+    input  wire   	[ 2:0]      dcache_wr_type,
+    input  wire   	[31:0]      dcache_wr_addr,
+    input  wire   	[ 3:0]      dcache_wr_wstrb,
+    input  wire     [127:0]		dcache_wr_data,
+    output wire					dcache_wr_rdy
+
 );
 
 
@@ -85,7 +91,7 @@ always @(*) begin
     case (ar_state)
         AR_INIT: begin
             //data和inst请求同时来的时候，data优先
-            if (data_sram_req && ~data_sram_wr) 
+            if (dcache_rd_req) 
                 ar_next_state = AR_DATA;
             else if (icache_rd_req)
                 ar_next_state = AR_INST;
@@ -118,10 +124,10 @@ always @(posedge aclk) begin
     end 
     // 仅初始态更新（避免重复锁存
     else if (ar_state == AR_INIT) begin
-        if (data_sram_req && ~data_sram_wr) begin
-            ar_addr_reg <= data_sram_addr;
+        if (dcache_rd_req) begin
+            ar_addr_reg <= dcache_rd_addr;
             arid <= 4'b0001;
-            arlen_reg <= 8'b0;
+            arlen_reg <= dcache_rd_type == 3'b100 ? 8'b11 : 8'b0;
         end else if (icache_rd_req) begin
             ar_addr_reg <= icache_rd_addr;
             arid <= 4'b0000;
@@ -131,8 +137,8 @@ always @(posedge aclk) begin
 end
 
 assign araddr = ar_addr_reg;
-assign icache_rd_rdy = arready && (arid == 4'b0000);
-assign data_sram_addr_ok = arvalid && arready && (arid == 4'b0001) || b_state == B_DATA_READY ;
+assign icache_rd_rdy = arvalid && arready && (arid == 4'b0000);
+assign dcache_rd_rdy = arvalid && arready && (arid == 4'b0001);
 assign arvalid = (ar_state == AR_INST) || (ar_state == AR_DATA);
 assign arlen = arlen_reg;
 assign arburst = 2'b01;
@@ -163,6 +169,9 @@ reg [3:0]       r_rid_reg;
 reg        icache_ret_valid_r;
 reg [31:0] icache_ret_data_r;
 reg        icache_ret_last_r;
+reg        dcache_ret_valid_r;
+reg [31:0] dcache_ret_data_r;
+reg        dcache_ret_last_r;
 always @(posedge aclk) begin
     if (!aresetn)
         r_state <= R_INIT;
@@ -209,8 +218,18 @@ always @(posedge aclk) begin
     icache_ret_valid_r <= 1'b0;
     icache_ret_data_r  <= 32'b0;
     icache_ret_last_r  <= 1'b0;
+    dcache_ret_valid_r <= 1'b0;
+    dcache_ret_data_r  <= 32'b0;
+    dcache_ret_last_r  <= 1'b0;
   end else begin
     icache_ret_valid_r <= (rvalid && rready && (rid == 4'b0000));
+    dcache_ret_valid_r <= (rvalid && rready && (rid == 4'b0001));
+    if(rvalid && rready && (rid == 4'b0001)) begin
+      dcache_ret_data_r <= rdata;
+      dcache_ret_last_r <= rlast;   
+    end else begin
+      dcache_ret_last_r <= 1'b0;
+    end
     if(rvalid && rready && (rid == 4'b0000)) begin
       icache_ret_data_r <= rdata;
       icache_ret_last_r <= rlast;   
@@ -221,13 +240,13 @@ always @(posedge aclk) begin
 end
 
 
-assign data_sram_rdata = (r_rid_reg == 4'b0001) ? r_rdata_reg : 32'b0;
 assign rready = (r_state == R_DATA);
-assign data_sram_data_ok = ((r_state == R_DATA_OVER) && (r_rid_reg == 4'b0001)) || (b_state == B_DATA_END);
 assign icache_ret_valid = icache_ret_valid_r;
 assign icache_ret_data  = icache_ret_data_r;
 assign icache_ret_last  = icache_ret_last_r;
-
+assign dcache_ret_valid = dcache_ret_valid_r;
+assign dcache_ret_data  = dcache_ret_data_r;
+assign dcache_ret_last  = dcache_ret_last_r;
 
 //第三部分：aw通道
 localparam AW_INIT       = 5'b00001,
@@ -240,6 +259,8 @@ reg [4:0]       aw_next_state;
 reg [31:0]      aw_addr_reg;
 reg [31:0]       aw_data_reg;
 reg [3:0]        aw_wstrb_reg;
+reg [7:0]        aw_len_reg;
+reg [127:0]      dcache_wr_data_reg;
 always @(posedge aclk) begin
     if (~aresetn)
         aw_state <= AW_INIT;
@@ -249,17 +270,17 @@ end
 always @(*) begin
     case (aw_state)
         AW_INIT: begin
-            if (data_sram_req && data_sram_wr) 
+            if (dcache_wr_req) 
                 aw_next_state = AW_NO_READY;
             else
                 aw_next_state = AW_INIT;
         end
         AW_NO_READY: begin
-            if (awvalid && awready && wvalid && wready)
+            if (awvalid && awready && wvalid && wready && wlast)
                 aw_next_state =  AW_END_READY;
             else if (awvalid && awready)
                 aw_next_state = AW_DATA_READY;
-            else if (wvalid && wready)
+            else if (wvalid && wready && wlast)
                 aw_next_state = AW_ADDR_READY;
             else
                 aw_next_state = AW_NO_READY;
@@ -271,7 +292,7 @@ always @(*) begin
                 aw_next_state = AW_ADDR_READY;
         end
         AW_DATA_READY: begin
-            if (wvalid && wready)
+            if (wvalid && wready && wlast)
                 aw_next_state =  AW_END_READY;
             else
                 aw_next_state = AW_DATA_READY;
@@ -289,37 +310,55 @@ end
 always @(posedge aclk) begin
     if (~aresetn) begin
         aw_addr_reg <= 32'b0;
-        aw_data_reg <= 32'b0;
         aw_wstrb_reg <= 4'b0;
-        awsize <= 3'b0;
+        awsize <= 3'b010;
+        aw_len_reg <= 8'b0;
+        dcache_wr_data_reg <= 128'b0;
     end 
     else if (aw_state == AW_INIT) begin
-        if (data_sram_req && data_sram_wr) begin
+        if (dcache_wr_req) begin
             // 数据 SRAM 写请求：锁存所有写信号
-            aw_addr_reg <= data_sram_addr;
-            aw_data_reg <= data_sram_wdata;
-            aw_wstrb_reg <= data_sram_wstrb;
-            awsize <= {1'b0, data_sram_size};
+            aw_addr_reg <= dcache_wr_addr;
+            aw_wstrb_reg <= dcache_wr_wstrb;
+            dcache_wr_data_reg <= dcache_wr_data;
+            awsize <= 3'b010; 
+            aw_len_reg  <= dcache_wr_type == 3'b100 ? 8'b11 : 8'b0;
         end 
     end
 end
 
+reg [1:0] w_beat_cnt;
 
+always @(posedge aclk) begin
+    if (!aresetn) begin
+        w_beat_cnt <= 2'd0;
+    end
+    // 新写请求进入（你这里 AW_INIT 且 dcache_wr_req）就清零
+    else if ((aw_state == AW_INIT) && dcache_wr_req) begin
+        w_beat_cnt <= 2'd0;
+    end
+    // 每次 W 通道握手成功，beat + 1
+    else if (wvalid && wready) begin
+        w_beat_cnt <= w_beat_cnt + 2'd1;
+    end
+end
 
+wire [31:0] wdata_sel;
+assign wdata_sel = dcache_wr_data_reg[w_beat_cnt*32 +: 32];
+assign wdata     = wdata_sel;
 assign awvalid = (aw_state == AW_ADDR_READY) || (aw_state == AW_NO_READY);
 assign wvalid = (aw_state == AW_DATA_READY) || (aw_state == AW_NO_READY);
 assign awid = 4'b1;
-assign awlen = 8'b0;
+assign awlen = aw_len_reg;
 assign awburst = 2'b01;
 assign awlock = 2'b0;
 assign awcache = 4'b0;
 assign awprot = 3'b0;
-assign wlast = 1'b1;
 assign wid = 4'b1;
 assign awaddr = aw_addr_reg;
-assign wdata = aw_data_reg;
 assign wstrb = aw_wstrb_reg;
-
+assign wlast = (w_beat_cnt == aw_len_reg[1:0]);
+assign dcache_wr_rdy = (aw_state == AW_INIT);
 //第四部分：b通道
 localparam B_INIT       = 3'b001,  // 初始状态：等待 W 通道写数据传输完成
            B_DATA_READY = 3'b010,  // 响应接收状态：准备接收 AXI 从设备的写响应
