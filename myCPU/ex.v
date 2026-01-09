@@ -62,7 +62,16 @@ module ex_stage(
     input  wire        wb_ex_e,
     output wire [31:0] vtl_addr,
     input wire [1:0]  csr_crmd_datm,
-    output wire [1:0] datm
+    output wire [1:0] datm,
+    // task 23
+    output wire icache_store_tag,
+    output wire icache_Index_Inv,
+    output wire icache_Hit_Inv,
+    output wire dcache_store_tag,
+    output wire dcache_Index_Inv,
+    output wire dcache_Hit_Inv,
+    output wire [31:0] cache_va,
+    input  wire cacop_ok
 );
 
 reg         EX_valid      ;
@@ -141,7 +150,13 @@ wire        tlb_used  ; // 确实用到了TLB进行地址翻译
 wire        isLoad ;
 wire        isStore;
 
-assign {EX_tlb_exc,
+// task 23
+wire        EX_cacop;
+wire  [4:0] EX_cacop_code;
+
+assign {EX_cacop,
+        EX_cacop_code,
+        EX_tlb_exc,
         EX_tlb_bus,
         EX_alu_op,
         EX_alu_src1,
@@ -183,7 +198,8 @@ wire exc_ale =
 
 //ALE发生时，BADV记录出错地址，故res_from_mem置为0,防止覆盖其值
 wire res_from_mem = EX_res_from_mem & !exc_ale;
-assign EX_to_MEM_bus = {EX_to_MEM_exc_tlb,
+assign EX_to_MEM_bus = {EX_cacop,
+                        EX_to_MEM_exc_tlb,
                         EX_to_MEM_tlb_bus,
                         res_from_mem,  
                         EX_gr_we       ,  
@@ -214,7 +230,8 @@ assign EX_to_ID_forward = {EX_gr_we,
 assign EX_exc_now = |EX_exc_last ?  EX_exc_last:
                     {1'b0, EX_exc_tlb[`EARRAY_TLBR_MEM], 6'b0, exc_ale, 2'b0, EX_exc_tlb[`EARRAY_PPI_MEM], EX_exc_tlb[`EARRAY_PME], 1'b0, EX_exc_tlb[`EARRAY_PIS], EX_exc_tlb[`EARRAY_PIL], 1'b0};
 
-assign EX_ready_go    = (is_div & EX_valid) ? div_done : 
+assign EX_ready_go    = EX_cacop ? cacop_ok :
+                        (is_div & EX_valid) ? div_done : 
                         data_sram_req ? data_sram_addr_ok :
                         1'b1;
 
@@ -307,13 +324,14 @@ assign phy_addr   = csr_direct_addr ? vtl_addr    :
                     dmw0_hit        ? dmw0_paddr  :
                     dmw1_hit        ? dmw1_paddr  :
                                       tlb_paddr   ;
-assign tlb_used = (EX_res_from_mem | (|EX_mem_we)) & ~wb_ex_e & ~(|EX_exc_last) & ~exc_ale //es_mem_req 
+assign tlb_used = (EX_res_from_mem | (|EX_mem_we) | EX_cacop & EX_cacop_code[4:3] == 2'b10) & ~wb_ex_e & ~(|EX_exc_last) & ~exc_ale //es_mem_req 
                     & (~csr_direct_addr & ~dmw0_hit & ~dmw1_hit);
 assign isStore  = |EX_mem_we;
 assign isLoad   = EX_res_from_mem;
-assign {EX_exc_tlb[`EARRAY_PIF], EX_exc_tlb[`EARRAY_TLBR_FETCH], EX_exc_tlb[`EARRAY_PPI_FETCH]} = 3'b0;
-assign EX_exc_tlb[`EARRAY_TLBR_MEM] = EX_valid & EX_res_from_mem & tlb_used & !s1_found;
-assign EX_exc_tlb[`EARRAY_PIL ] = EX_valid & tlb_used & isLoad  & !EX_exc_tlb[`EARRAY_TLBR_MEM] & !s1_v;
+assign {EX_exc_tlb[`EARRAY_PIF], EX_exc_tlb[`EARRAY_PPI_FETCH]} = 2'b0;
+assign EX_exc_tlb[`EARRAY_TLBR_FETCH] = EX_valid & tlb_used & EX_cacop & (EX_cacop_code == 5'b10000) & !s1_found;
+assign EX_exc_tlb[`EARRAY_TLBR_MEM] = EX_valid & (EX_res_from_mem | (EX_cacop & (EX_cacop_code == 5'b10001))) & tlb_used & !s1_found;
+assign EX_exc_tlb[`EARRAY_PIL ] = EX_valid & tlb_used & (isLoad | EX_cacop)  & !EX_exc_tlb[`EARRAY_TLBR_MEM] & !s1_v;
 assign EX_exc_tlb[`EARRAY_PIS ] = EX_valid & tlb_used & isStore & !EX_exc_tlb[`EARRAY_TLBR_MEM] & !s1_v;
 assign EX_exc_tlb[`EARRAY_PPI_MEM] = EX_valid & tlb_used & (isLoad | isStore) & !EX_exc_tlb[`EARRAY_PIL] & !EX_exc_tlb[`EARRAY_PIS] & (crmd_plv_fromCSR > s1_plv) & !EX_exc_tlb[`EARRAY_TLBR_MEM];
 assign EX_exc_tlb[`EARRAY_PME ] = EX_valid & tlb_used & isStore & !EX_exc_tlb[`EARRAY_PPI_MEM] & !s1_d & !EX_exc_tlb[`EARRAY_PPI_MEM] & !s1_d;
@@ -322,4 +340,16 @@ assign datm       = csr_direct_addr ? csr_crmd_datm :
                     dmw0_hit        ? csr_dmw0_mat  :
                     dmw1_hit        ? csr_dmw1_mat  :
                                         s1_mat        ; 
+
+// task 23
+assign icache_store_tag = EX_cacop & (EX_cacop_code == 5'b00000) & EX_valid & MEM_allow & ~wb_ex_e & ~has_exc & ~EX_exc_now;
+assign icache_Index_Inv = EX_cacop & (EX_cacop_code == 5'b01000) & EX_valid & MEM_allow & ~wb_ex_e & ~has_exc & ~EX_exc_now;
+assign icache_Hit_Inv = EX_cacop & (EX_cacop_code == 5'b10000) & EX_valid & MEM_allow & ~wb_ex_e & ~has_exc & ~EX_exc_now;
+assign dcache_store_tag = EX_cacop & (EX_cacop_code == 5'b00001) & EX_valid & MEM_allow & ~wb_ex_e & ~has_exc & ~EX_exc_now;
+assign dcache_Index_Inv = EX_cacop & (EX_cacop_code == 5'b01001) & EX_valid & MEM_allow & ~wb_ex_e & ~has_exc & ~EX_exc_now;
+assign dcache_Hit_Inv = EX_cacop & (EX_cacop_code == 5'b10001) & EX_valid & MEM_allow & ~wb_ex_e & ~has_exc & ~EX_exc_now;
+assign cache_va = (icache_store_tag | icache_Index_Inv | dcache_store_tag | dcache_Index_Inv) ? vtl_addr :
+                    ((icache_Hit_Inv | dcache_Hit_Inv) & ~(|EX_exc_tlb)) ? phy_addr :
+                    32'b0;
+                    
 endmodule

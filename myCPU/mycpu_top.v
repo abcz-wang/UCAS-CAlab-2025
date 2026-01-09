@@ -232,6 +232,28 @@ wire [ 3:0] dcache_wr_wstrb;
 wire[127:0] dcache_wr_data;
 wire        dcache_wr_rdy;
 
+// task 23
+wire icache_store_tag;
+wire icache_Index_Inv;
+wire icache_Hit_Inv;
+wire dcache_store_tag;
+wire dcache_Index_Inv;
+wire dcache_Hit_Inv;
+wire [31:0] cache_va;
+wire icacop_ok;
+wire dcacop_ok;
+wire cacop_ok;
+
+wire icache_cacop;
+wire dcache_cacop;
+
+assign icache_cacop = icache_store_tag | icache_Index_Inv | icache_Hit_Inv;
+assign dcache_cacop = dcache_store_tag | dcache_Index_Inv | dcache_Hit_Inv;
+assign cacop_ok = icache_cacop & icacop_ok | dcache_cacop & dcacop_ok;
+
+wire       exc_now_cacop;
+
+
 wire inst_sram_req;
 wire inst_sram_wr;
 wire [1:0]  inst_sram_size;
@@ -334,7 +356,9 @@ csr my_csr(
     .exc_now_fetch(exc_now_fetch),
     .csr_dmw1_mat(csr_dmw1_mat),
     .csr_dmw0_mat(csr_dmw0_mat),
-    .csr_crmd_datm(csr_crmd_datm)
+    .csr_crmd_datm(csr_crmd_datm),
+    // task 23
+    .exc_now_cacop(exc_now_cacop)
 );
 
 
@@ -454,7 +478,16 @@ ex_stage ex_stage(
     .datm(datm),
     .wb_ex_e(wb_ex_e),
     .vtl_addr(data_addr_vrtl),
-    .csr_crmd_datm(csr_crmd_datm)
+    .csr_crmd_datm(csr_crmd_datm),
+    // task 23
+    .icache_store_tag(icache_store_tag),
+    .icache_Index_Inv(icache_Index_Inv),
+    .icache_Hit_Inv(icache_Hit_Inv),
+    .dcache_store_tag(dcache_store_tag),
+    .dcache_Index_Inv(dcache_Index_Inv),
+    .dcache_Hit_Inv(dcache_Hit_Inv),
+    .cache_va(cache_va),
+    .cacop_ok(cacop_ok)
 );
 // MEM stage
 mem_stage mem_stage(
@@ -499,7 +532,9 @@ wb_stage wb_stage(
     .debug_wb_pc        (debug_wb_pc),
     .debug_wb_rf_we     (debug_wb_rf_we),
     .debug_wb_rf_wnum   (debug_wb_rf_wnum),
-    .debug_wb_rf_wdata  (debug_wb_rf_wdata)
+    .debug_wb_rf_wdata  (debug_wb_rf_wdata),
+    // task 23
+    .exc_now_cacop(exc_now_cacop)
 
 );
 
@@ -649,7 +684,7 @@ tlb tlb(
 cache Icache(
     .clk    (aclk                       ),
     .resetn (resetn_sync                ),
-    .valid  (inst_sram_req              ),
+    .valid  (inst_sram_req & ~icache_Hit_Inv   ),
     .op     (inst_sram_wr               ),
     .index  (inst_addr_vrtl[11:4]       ),
     .tag    (inst_sram_addr[31:12]      ),
@@ -674,7 +709,14 @@ cache Icache(
     .wr_wstrb(icache_wr_wstrb             ),
     .wr_data(icache_wr_data             ),
     .datm(2'b01                         ),
-    .wr_rdy (icache_wr_rdy              )
+    .wr_rdy (icache_wr_rdy              ),
+    
+    // task 23
+    .cache_store_tag (icache_store_tag),
+    .cache_Index_Inv (icache_Index_Inv),
+    .cache_Hit_Inv (icache_Hit_Inv),
+    .cacop_va (cache_va),
+    .cacop_ok (icacop_ok)
 );
 
 cache Dcache(
@@ -705,7 +747,14 @@ cache Dcache(
     .wr_wstrb(dcache_wr_wstrb            ),
     .wr_data(dcache_wr_data             ),
     .datm   (datm                       ),
-    .wr_rdy (dcache_wr_rdy              )
+    .wr_rdy (dcache_wr_rdy              ),
+
+    // task 23
+    .cache_store_tag(dcache_store_tag),
+    .cache_Index_Inv(dcache_Index_Inv),
+    .cache_Hit_Inv(dcache_Hit_Inv),
+    .cacop_va(cache_va),
+    .cacop_ok(dcacop_ok)
 );
 
 endmodule

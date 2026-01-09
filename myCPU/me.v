@@ -63,7 +63,11 @@ wire [78:0] MEM_csr_access_b;
 wire [7:0] EX_to_MEM_exc_tlb;
 wire [7:0] MEM_to_WB_exc_tlb;
 
-assign {EX_to_MEM_exc_tlb,
+// task 23
+wire MEM_cacop;
+
+assign {MEM_cacop,
+        EX_to_MEM_exc_tlb,
         EX_to_MEM_tlb_bus,
         MEM_res_from_mem,
         MEM_gr_we       ,
@@ -81,7 +85,8 @@ assign {EX_to_MEM_exc_tlb,
         MEM_req
 } = EX_to_MEM_bus_reg;
 assign MEM_exc_now = MEM_exc_last;
-assign MEM_to_WB_bus = {MEM_alu_result,
+assign MEM_to_WB_bus = {MEM_cacop,
+                        MEM_alu_result,
                         MEM_to_WB_exc_tlb,
                         MEM_to_WB_tlb_bus,
                         MEM_gr_we       , 

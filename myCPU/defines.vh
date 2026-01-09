@@ -1,8 +1,8 @@
 `define IF2ID_BUS_LEN   88
 
-`define ID2EX_BUS_LEN  280
-`define EX2MEM_BUS_LEN  192
-`define MEM2WB_BUS_LEN  218
+`define ID2EX_BUS_LEN  286
+`define EX2MEM_BUS_LEN  193
+`define MEM2WB_BUS_LEN  219
 `define WB2ID_BUS_LEN  38
 `define ID2IF_BUS_LEN  34
 

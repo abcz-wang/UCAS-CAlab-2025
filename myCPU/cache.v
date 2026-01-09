@@ -32,9 +32,16 @@ module cache(
     output wire [ 3:0] wr_wstrb,  // 写操作的字节掩码。仅在写请求类型为 3'b000、3'b001、3'b010 情况下才有意义
     output wire [127:0] wr_data, // 写数据
 	input wire  [ 1:0] datm,
-    input  wire        wr_rdy /*写请求能否被接收的握手信号。高电平有效。此处要求 wr_rdy 要先于 wr_req
+    input  wire        wr_rdy, /*写请求能否被接收的握手信号。高电平有效。此处要求 wr_rdy 要先于 wr_req
 置起，wr_req 看到 wr_rdy 后才可能置上。所以 wr_rdy 的生成不要组合逻辑依赖
 wr_req，它应该是当 AXI 总线接口内部的 16 字节写缓存为空时就置上*/
+
+	// task 23
+	input  wire        cache_store_tag,
+    input  wire        cache_Index_Inv,
+    input  wire        cache_Hit_Inv,
+    input  wire [31:0] cacop_va,
+    output wire        cacop_ok
 );
 localparam READ = 1'b0;
 localparam WRITE = 1'b1;
@@ -44,6 +51,39 @@ wire lookup,hitwrite,replace,refill;
 wire reset;
 assign reset = ~resetn;
 
+wire uncache;
+
+// task 23
+wire [19:0]  cacop_va_tag;
+assign cacop_va_tag = cacop_va[31:12];
+wire [7:0]  cacop_va_index;
+assign cacop_va_index = cacop_va[11:4];
+wire        cacop_store_tag;    
+wire        cacop_Index_Inv;
+wire        cacop_Hit_Inv_e;
+assign cacop_store_tag         = cache_store_tag        && (M_current_state == M_IDLE);
+assign cacop_Index_Inv  = cache_Index_Inv && (M_current_state == M_IDLE);
+assign cacop_Hit_Inv_e = cache_Hit_Inv   && (M_current_state == M_IDLE);
+
+reg         cacop_Hit_Inva;
+
+always @(posedge clk)begin
+	if(reset)
+		cacop_Hit_Inva <= 1'b0;
+	else if(cacop_ok)
+		cacop_Hit_Inva <= 1'b0;
+	else if(M_current_state == M_IDLE)
+		cacop_Hit_Inva <= cacop_Hit_Inv_e;
+end
+
+wire cacop_active = cacop_store_tag
+                 || cacop_Index_Inv
+                 || cacop_Hit_Inva
+                 || cacop_Hit_Inv_e;
+
+wire uncache_eff = uncache && !cacop_active;
+
+
 reg [1:0] datm_reg;
 always @(posedge clk)begin
     if(reset)
@@ -51,7 +91,6 @@ always @(posedge clk)begin
     else if(lookup)
         datm_reg <= datm;
 end
-wire uncache;
 assign uncache = datm_reg == 2'b00;
 //RAM相关接口
 wire [7:0]data_addr;
@@ -72,7 +111,7 @@ wire tagv_w0_we, tagv_w1_we;
 data_bank_ram data_way0bank0 (
   .clka(clk),    // input wire clka
     .ena(data_w0b0_en),      // input wire ena
-  .wea(data_w0b0_we & {4{~uncache}}),       // input wire [3 : 0] wea，字节写使能信号
+  .wea(data_w0b0_we & {4{~uncache_eff}}),       // input wire [3 : 0] wea，字节写使能信号
   .addra(data_addr),  // input wire [7 : 0] addra
   .dina(data_wdata),    // input wire [31 : 0] dina
   .douta(data_w0b0_rdata)  // output wire [31 : 0] douta
@@ -80,7 +119,7 @@ data_bank_ram data_way0bank0 (
 data_bank_ram data_way0bank1 (
   .clka(clk),    // input wire clka
     .ena(data_w0b1_en),      // input wire ena
-  .wea(data_w0b1_we & {4{~uncache}}),      // input wire [3 : 0] wea
+  .wea(data_w0b1_we & {4{~uncache_eff}}),      // input wire [3 : 0] wea
   .addra(data_addr),  // input wire [7 : 0] addra
   .dina(data_wdata),    // input wire [31 : 0] dina
   .douta(data_w0b1_rdata)  // output wire [31 : 0] douta
@@ -88,7 +127,7 @@ data_bank_ram data_way0bank1 (
 data_bank_ram data_way0bank2 (
   .clka(clk),    // input wire clka
     .ena(data_w0b2_en),      // input wire ena
-  .wea(data_w0b2_we & {4{~uncache}}),      // input wire [3 : 0] wea
+  .wea(data_w0b2_we & {4{~uncache_eff}}),      // input wire [3 : 0] wea
   .addra(data_addr),  // input wire [7 : 0] addra
   .dina(data_wdata),    // input wire [31 : 0] dina
   .douta(data_w0b2_rdata)  // output wire [31 : 0] douta
@@ -96,7 +135,7 @@ data_bank_ram data_way0bank2 (
 data_bank_ram data_way0bank3 (
   .clka(clk),    // input wire clka
     .ena(data_w0b3_en),      // input wire ena
-  .wea(data_w0b3_we & {4{~uncache}}),      // input wire [3 : 0] wea
+  .wea(data_w0b3_we & {4{~uncache_eff}}),      // input wire [3 : 0] wea
   .addra(data_addr),  // input wire [7 : 0] addra
   .dina(data_wdata),    // input wire [31 : 0] dina
   .douta(data_w0b3_rdata)  // output wire [31 : 0] douta
@@ -105,7 +144,7 @@ data_bank_ram data_way0bank3 (
 data_bank_ram data_way1bank0 (
   .clka(clk),    // input wire clka
   .ena(data_w1b0_en),      // input wire ena
-  .wea(data_w1b0_we & {4{~uncache}}),      // input wire [3 : 0] wea
+  .wea(data_w1b0_we & {4{~uncache_eff}}),      // input wire [3 : 0] wea
   .addra(data_addr),  // input wire [7 : 0] addra
   .dina(data_wdata),    // input wire [31 : 0] dina
   .douta(data_w1b0_rdata)  // output wire [31 : 0] douta
@@ -113,7 +152,7 @@ data_bank_ram data_way1bank0 (
 data_bank_ram data_way1bank1 (
   .clka(clk),    // input wire clka
   .ena(data_w1b1_en),      // input wire ena
-  .wea(data_w1b1_we & {4{~uncache}}),      // input wire [3 : 0] wea
+  .wea(data_w1b1_we & {4{~uncache_eff}}),      // input wire [3 : 0] wea
   .addra(data_addr),  // input wire [7 : 0] addra
   .dina(data_wdata),    // input wire [31 : 0] dina
   .douta(data_w1b1_rdata)  // output wire [31 : 0] douta
@@ -121,7 +160,7 @@ data_bank_ram data_way1bank1 (
 data_bank_ram data_way1bank2 (
   .clka(clk),    // input wire clka
   .ena(data_w1b2_en),      // input wire ena
-  .wea(data_w1b2_we & {4{~uncache}}),      // input wire [3 : 0] wea
+  .wea(data_w1b2_we & {4{~uncache_eff}}),      // input wire [3 : 0] wea
   .addra(data_addr),  // input wire [7 : 0] addra
   .dina(data_wdata),    // input wire [31 : 0] dina
   .douta(data_w1b2_rdata)  // output wire [31 : 0] douta
@@ -129,7 +168,7 @@ data_bank_ram data_way1bank2 (
 data_bank_ram data_way1bank3 (
   .clka(clk),    // input wire clka
   .ena(data_w1b3_en),      // input wire ena
-  .wea(data_w1b3_we & {4{~uncache}}),      // input wire [3 : 0] wea
+  .wea(data_w1b3_we & {4{~uncache_eff}}),      // input wire [3 : 0] wea
   .addra(data_addr),  // input wire [7 : 0] addra
   .dina(data_wdata),    // input wire [31 : 0] dina
   .douta(data_w1b3_rdata)  // output wire [31 : 0] douta
@@ -138,7 +177,7 @@ data_bank_ram data_way1bank3 (
 tagv_ram tagv_way0 (
   .clka(clk),    // input wire clka
   .ena(tagv_w0_en),      // input wire ena
-  .wea(tagv_w0_we & ~uncache),      // input wire [0 : 0] wea
+  .wea(tagv_w0_we & ~uncache_eff),      // input wire [0 : 0] wea
   .addra(tagv_addr),  // input wire [7 : 0] addra
   .dina(tagv_wdata),    // input wire [20 : 0] dina
   .douta(tagv_w0_rdata)  // output wire [20 : 0] douta
@@ -146,7 +185,7 @@ tagv_ram tagv_way0 (
 tagv_ram tagv_way1 (
   .clka(clk),    // input wire clka
     .ena(tagv_w1_en),      // input wire ena
-  .wea(tagv_w1_we & ~uncache),      // input wire [0 : 0] wea
+  .wea(tagv_w1_we & ~uncache_eff),      // input wire [0 : 0] wea
   .addra(tagv_addr),  // input wire [7 : 0] addra
   .dina(tagv_wdata),    // input wire [20 : 0] dina
   .douta(tagv_w1_rdata)  // output wire [20 : 0] douta
@@ -184,8 +223,8 @@ assign {way0_tag, way0_v} = tagv_w0_rdata;
 assign {way1_tag, way1_v} = tagv_w1_rdata;
 assign way0_hit = way0_v && (way0_tag == reg_tag);
 assign way1_hit = way1_v && (way1_tag == reg_tag); 
-assign way0_hit_eff = way0_hit & ~uncache;
-assign way1_hit_eff = way1_hit & ~uncache;
+assign way0_hit_eff = way0_hit & ~uncache_eff;
+assign way1_hit_eff = way1_hit & ~uncache_eff;
 assign cache_hit = (way0_hit_eff || way1_hit_eff);
 assign hit_write = cache_hit && (reg_op == WRITE) && (M_current_state == M_LOOKUP);
 assign hit_read = cache_hit && (reg_op == READ) && (M_current_state == M_LOOKUP);
@@ -276,7 +315,7 @@ end
 always @(*) begin
 	case (M_current_state)
 		M_IDLE: begin
-			if (valid && !hit_write_hazard_wb && ~uncache_no_req) begin
+			if ((valid || cacop_Hit_Inv_e) && !hit_write_hazard_wb && !uncache_no_req && !cacop_Hit_Inva) begin
 				M_next_state = M_LOOKUP;
 			end
 			else begin
@@ -284,7 +323,7 @@ always @(*) begin
 			end
 		end
 		M_LOOKUP: begin
-			if (~cache_hit || uncache) begin
+			if ((!cache_hit || uncache) && !cacop_Hit_Inva) begin
 				M_next_state = M_MISS;
 			end
 			else if (!valid || have_hazard) begin
@@ -347,47 +386,79 @@ always @(*) begin
 	endcase
 end
 //TAGV
-assign tagv_addr = {8{lookup_hit}} & index
-				| {8{replace | refill}} & reg_index;
+assign tagv_addr = {8{cacop_store_tag || cacop_Index_Inv}} & cacop_va[11:4] |
+                   {8{~cacop_store_tag && ~cacop_Index_Inv}} & (
+				   {8{lookup_hit}} & index |
+				   {8{cacop_Hit_Inva && cache_hit}} & cacop_va_index |
+				   {8{replace | refill}} & reg_index);
 
-assign tagv_wdata =  {reg_tag, 1'b1};
-assign tagv_w0_we = (refill) && (replace_way == 1'b0) && ret_valid && (miss_ret_cnt == reg_offset[3:2]);
-assign tagv_w1_we = (refill) && (replace_way == 1'b1) && ret_valid && (miss_ret_cnt == reg_offset[3:2]);
-assign tagv_w0_en = lookup_hit | (replace && replace_way == 1'b0) | (refill && replace_way == 1'b0);
-assign tagv_w1_en = lookup_hit | (replace && replace_way == 1'b1) | (refill && replace_way == 1'b1);
+assign tagv_wdata = {21{refill}} & {reg_tag, 1'b1} |
+                    {21{cacop_store_tag || cacop_Index_Inv}} & 21'b0 |
+                    {21{cacop_Hit_Inva && cache_hit}} & 21'b0;
+assign tagv_w0_we = (refill) && (replace_way == 1'b0) && ret_valid && (miss_ret_cnt == reg_offset[3:2]) ||
+					(cacop_store_tag || cacop_Index_Inv) && (~cacop_va[0]) ||
+					(cacop_Hit_Inva && M_current_state == M_LOOKUP && way0_hit_eff);
+assign tagv_w1_we = (refill) && (replace_way == 1'b1) && ret_valid && (miss_ret_cnt == reg_offset[3:2]) ||
+					(cacop_store_tag || cacop_Index_Inv) && (cacop_va[0]) ||
+					(cacop_Hit_Inva && M_current_state == M_LOOKUP && way1_hit_eff);
+assign tagv_w0_en = lookup_hit || (replace && replace_way == 1'b0) || (refill && replace_way == 1'b0) || 
+					((cacop_store_tag || cacop_Index_Inv) && (~cacop_va[0])) ||
+					(cacop_Hit_Inva && M_current_state == M_LOOKUP && way0_hit_eff);
+assign tagv_w1_en = lookup_hit || (replace && replace_way == 1'b1) || (refill && replace_way == 1'b1) ||
+					((cacop_store_tag || cacop_Index_Inv) && (cacop_va[0])) ||
+					(cacop_Hit_Inva && M_current_state == M_LOOKUP && way1_hit_eff);
 //数据通路部分
-assign lookup = ~uncache_no_req && ((M_current_state == M_LOOKUP) && cache_hit & valid & !hit_write_hazard_wb || 
-				(M_current_state == M_IDLE) && valid && !have_hazard);
+/* assign lookup = ~uncache_no_req && ((M_current_state == M_LOOKUP) && cache_hit & (valid || cacop_Hit_Inva) & !hit_write_hazard_wb || 
+				(M_current_state == M_IDLE) && (valid || cacop_Hit_Inv_e) && !have_hazard); */
+assign lookup =
+  (!uncache_no_req) &&
+  ( ((M_current_state == M_LOOKUP) && cache_hit && (valid || cacop_Hit_Inva) && !hit_write_hazard_wb)
+    || ((M_current_state == M_IDLE) && (valid || cacop_Hit_Inv_e) && !have_hazard) );
 assign hitwrite = (WB_current_state == WB_WRITE);
 assign replace = (M_current_state == M_REPLACE || M_current_state == M_MISS);
 assign refill = (M_current_state == M_REFILL);
 /*不使用命中信息cache_hit控制RAM读使能,视为命中.如果使用cache_hit信号
 因为cache_hit信号需要靠从ram中读出的数据生成的，因此使用这个信号
 会让RAM读使能依赖输出信号，从而引入逻辑环，产生错误*/
-wire lookup_hit = ~uncache_no_req && ((M_current_state == M_LOOKUP) & valid & !hit_write_hazard_wb || 
-				(M_current_state == M_IDLE) && valid && !have_hazard);
+/* wire lookup_hit = ~uncache_no_req && ((M_current_state == M_LOOKUP) & valid & !hit_write_hazard_wb || 
+				(M_current_state == M_IDLE) && valid && !have_hazard); */
+
+wire lookup_hit =
+  (!uncache_no_req) &&
+  ( ((M_current_state == M_LOOKUP) && valid && !hit_write_hazard_wb)
+    || ((M_current_state == M_IDLE) && valid && !have_hazard) );
 //地址
-assign data_addr = {8{lookup_hit}} & index
-				| {8{replace | refill}} & reg_index
-				| {8{hitwrite}} & wb_index;
+assign data_addr = (cacop_Hit_Inva | cacop_Hit_Inv_e) ? cacop_va_index :
+                   (cacop_store_tag || cacop_Index_Inv) ? cacop_va[11:4] :
+				   {8{lookup_hit}} & index
+				   | {8{replace | refill}} & reg_index
+				   | {8{hitwrite}} & wb_index;
 //字节写使能
 assign  data_w0b0_we = {4{(hitwrite && (wb_way == 1'b0) && (wb_bank == 2'b00))}} & wb_wstrb
-						|{4{(refill && (miss_ret_cnt == 2'b00) && (replace_way == 1'b0) && ret_valid)}} & {4{1'b1}};//д��way0bank0
+						|{4{(refill && (miss_ret_cnt == 2'b00) && (replace_way == 1'b0) && ret_valid)}} & {4{1'b1}} |
+                       	{4{cacop_store_tag && (~cacop_va[0])}} & {4'b1111};//д��way0bank0
 assign  data_w0b1_we = {4{(hitwrite && (wb_way == 1'b0) && (wb_bank == 2'b01))}} & wb_wstrb
-						|{4{(refill && (miss_ret_cnt == 2'b01) && (replace_way == 1'b0) && ret_valid)}} & {4{1'b1}};//д��way0bank1
+						|{4{(refill && (miss_ret_cnt == 2'b01) && (replace_way == 1'b0) && ret_valid)}} & {4{1'b1}} |
+                       	{4{cacop_store_tag && (~cacop_va[0])}} & {4'b1111};//д��way0bank1
 assign  data_w0b2_we = {4{(hitwrite && (wb_way == 1'b0) && (wb_bank == 2'b10))}} & wb_wstrb
-						|{4{(refill && (miss_ret_cnt == 2'b10) && (replace_way == 1'b0) && ret_valid)}} & {4{1'b1}};//д��way0bank2
+						|{4{(refill && (miss_ret_cnt == 2'b10) && (replace_way == 1'b0) && ret_valid)}} & {4{1'b1}} |
+                       	{4{cacop_store_tag && (~cacop_va[0])}} & {4'b1111};//д��way0bank2
 assign  data_w0b3_we = {4{(hitwrite && (wb_way == 1'b0) && (wb_bank == 2'b11))}} & wb_wstrb
-						|{4{(refill && (miss_ret_cnt == 2'b11) && (replace_way == 1'b0) && ret_valid)}} & {4{1'b1}};//д��way0bank3
+						|{4{(refill && (miss_ret_cnt == 2'b11) && (replace_way == 1'b0) && ret_valid)}} & {4{1'b1}} |
+                       	{4{cacop_store_tag && (~cacop_va[0])}} & {4'b1111};//д��way0bank3
 
 assign  data_w1b0_we = {4{(hitwrite && (wb_way == 1'b1) && (wb_bank == 2'b00))}} & wb_wstrb
-						|{4{(refill && (miss_ret_cnt == 2'b00) && (replace_way == 1'b1) && ret_valid)}} & {4{1'b1}};//д��way1bank0
-assign data_w1b1_we = {4{(hitwrite && (wb_way == 1'b1) && (wb_bank == 2'b01))}} & wb_wstrb
-						|{4{(refill && (miss_ret_cnt == 2'b01) && (replace_way == 1'b1) && ret_valid)}} & {4{1'b1}};//д��way1bank1
-assign data_w1b2_we = {4{(hitwrite && (wb_way == 1'b1) && (wb_bank == 2'b10))}} & wb_wstrb
-						|{4{(refill && (miss_ret_cnt == 2'b10) && (replace_way == 1'b1) && ret_valid)}} & {4{1'b1}};//д��way1bank2
-assign data_w1b3_we = {4{(hitwrite && (wb_way == 1'b1) && (wb_bank == 2'b11))}} & wb_wstrb
-						|{4{(refill && (miss_ret_cnt == 2'b11) && (replace_way == 1'b1) && ret_valid)}} & {4{1'b1}};//д��way1bank3
+						|{4{(refill && (miss_ret_cnt == 2'b00) && (replace_way == 1'b1) && ret_valid)}} & {4{1'b1}} |
+                       	{4{cacop_store_tag && (cacop_va[0])}} & {4'b1111};//д��way1bank0
+assign  data_w1b1_we = {4{(hitwrite && (wb_way == 1'b1) && (wb_bank == 2'b01))}} & wb_wstrb
+						|{4{(refill && (miss_ret_cnt == 2'b01) && (replace_way == 1'b1) && ret_valid)}} & {4{1'b1}} |
+                       	{4{cacop_store_tag && (cacop_va[0])}} & {4'b1111};//д��way1bank1
+assign  data_w1b2_we = {4{(hitwrite && (wb_way == 1'b1) && (wb_bank == 2'b10))}} & wb_wstrb
+						|{4{(refill && (miss_ret_cnt == 2'b10) && (replace_way == 1'b1) && ret_valid)}} & {4{1'b1}} |
+                       {4{cacop_store_tag && (cacop_va[0])}} & {4'b1111};//д��way1bank2
+assign  data_w1b3_we = {4{(hitwrite && (wb_way == 1'b1) && (wb_bank == 2'b11))}} & wb_wstrb
+						|{4{(refill && (miss_ret_cnt == 2'b11) && (replace_way == 1'b1) && ret_valid)}} & {4{1'b1}} |
+                       {4{cacop_store_tag && (cacop_va[0])}} & {4'b1111};//д��way1bank3
 //写数据
 wire [31:0] merge_word;
 assign merge_word[31:24] = reg_wstrb[3] ? reg_wdata[31:24] : ret_data[31:24];
@@ -399,17 +470,26 @@ assign is_target_word = (miss_ret_cnt == reg_offset[3:2]);
 wire [31:0] refill_ram_wdata;
 assign refill_ram_wdata = (is_target_word && reg_op == WRITE) ? merge_word : ret_data;
 
-assign data_wdata = {32{hitwrite}} & wb_wdata
-						| {32{refill}} & refill_ram_wdata;
+assign data_wdata = (cacop_store_tag) ? 32'b0 :
+					{32{hitwrite}} & wb_wdata
+					 | {32{refill}} & refill_ram_wdata;
 //片选
-assign data_w0b0_en = (lookup_hit && offset[3:2] == 2'b00) | (hitwrite && (wb_way == 1'b0)) | (replace && (replace_way == 1'b0)) | (refill && (replace_way == 1'b0));
-assign data_w0b1_en = (lookup_hit && offset[3:2] == 2'b01) | (hitwrite && (wb_way == 1'b0)) | (replace && (replace_way == 1'b0)) | (refill && (replace_way == 1'b0));
-assign data_w0b2_en = (lookup_hit && offset[3:2] == 2'b10) | (hitwrite && (wb_way == 1'b0)) | (replace && (replace_way == 1'b0)) | (refill && (replace_way == 1'b0));
-assign data_w0b3_en = (lookup_hit && offset[3:2] == 2'b11) | (hitwrite && (wb_way == 1'b0)) | (replace && (replace_way == 1'b0)) | (refill && (replace_way == 1'b0));
-assign data_w1b0_en = (lookup_hit && offset[3:2] == 2'b00) | (hitwrite && (wb_way == 1'b1)) | (replace && (replace_way == 1'b1)) | (refill && (replace_way == 1'b1));
-assign data_w1b1_en = (lookup_hit && offset[3:2] == 2'b01) | (hitwrite && (wb_way == 1'b1)) | (replace && (replace_way == 1'b1)) | (refill && (replace_way == 1'b1));
-assign data_w1b2_en = (lookup_hit && offset[3:2] == 2'b10) | (hitwrite && (wb_way == 1'b1)) | (replace && (replace_way == 1'b1)) | (refill && (replace_way == 1'b1));
-assign data_w1b3_en = (lookup_hit && offset[3:2] == 2'b11) | (hitwrite && (wb_way == 1'b1)) | (replace && (replace_way == 1'b1)) | (refill && (replace_way == 1'b1));
+assign data_w0b0_en = (lookup_hit && offset[3:2] == 2'b00) || (hitwrite && (wb_way == 1'b0)) || (replace && (replace_way == 1'b0)) || (refill && (replace_way == 1'b0)) ||
+                       (cacop_store_tag || cacop_Index_Inv) && (~cacop_va[0]);
+assign data_w0b1_en = (lookup_hit && offset[3:2] == 2'b01) || (hitwrite && (wb_way == 1'b0)) || (replace && (replace_way == 1'b0)) || (refill && (replace_way == 1'b0)) ||
+                       (cacop_store_tag || cacop_Index_Inv) && (~cacop_va[0]);
+assign data_w0b2_en = (lookup_hit && offset[3:2] == 2'b10) || (hitwrite && (wb_way == 1'b0)) || (replace && (replace_way == 1'b0)) || (refill && (replace_way == 1'b0)) ||
+                       (cacop_store_tag || cacop_Index_Inv) && (~cacop_va[0]);
+assign data_w0b3_en = (lookup_hit && offset[3:2] == 2'b11) || (hitwrite && (wb_way == 1'b0)) || (replace && (replace_way == 1'b0)) || (refill && (replace_way == 1'b0)) ||
+                       (cacop_store_tag || cacop_Index_Inv) && (~cacop_va[0]);
+assign data_w1b0_en = (lookup_hit && offset[3:2] == 2'b00) || (hitwrite && (wb_way == 1'b1)) || (replace && (replace_way == 1'b1)) || (refill && (replace_way == 1'b1)) ||
+                       (cacop_store_tag || cacop_Index_Inv) && (cacop_va[0]);
+assign data_w1b1_en = (lookup_hit && offset[3:2] == 2'b01) || (hitwrite && (wb_way == 1'b1)) || (replace && (replace_way == 1'b1)) || (refill && (replace_way == 1'b1)) ||
+                       (cacop_store_tag || cacop_Index_Inv) && (cacop_va[0]);
+assign data_w1b2_en = (lookup_hit && offset[3:2] == 2'b10) || (hitwrite && (wb_way == 1'b1)) || (replace && (replace_way == 1'b1)) || (refill && (replace_way == 1'b1)) ||
+                       (cacop_store_tag || cacop_Index_Inv) && (cacop_va[0]);
+assign data_w1b3_en = (lookup_hit && offset[3:2] == 2'b11) || (hitwrite && (wb_way == 1'b1)) || (replace && (replace_way == 1'b1)) || (refill && (replace_way == 1'b1)) ||
+                       (cacop_store_tag || cacop_Index_Inv) && (cacop_va[0]);
 //request buffer
 always @(posedge clk ) 
 begin
@@ -424,7 +504,7 @@ begin
 	else if(lookup)begin
 		reg_op	 <= op;
 		reg_index <= index;
-		reg_tag	 <= tag;
+		reg_tag	 <= cacop_Hit_Inv_e ? cacop_va_tag : tag;
 		reg_offset<= offset;
 		reg_wstrb <= wstrb;	
 		reg_wdata <= wdata;
@@ -488,8 +568,8 @@ begin
 	end
 end
 //cache - cpu 接口信号
-assign addr_ok = ~uncache_no_req && ((M_current_state == M_IDLE) || (M_current_state == M_LOOKUP 
-				&& valid && (cache_hit || uncache) && !have_hazard));
+assign addr_ok = ~uncache_no_req && ((M_current_state == M_IDLE) && valid && !have_hazard ||
+	 			(M_current_state == M_LOOKUP && valid && (cache_hit || uncache) && !have_hazard));
 
 assign data_ok = (M_current_state == M_LOOKUP) && (cache_hit) && ~uncache ||
                  (M_current_state == M_MISS) && uncache && wr_rdy && reg_op == WRITE ||
@@ -503,7 +583,9 @@ assign rd_addr = uncache
                ? {reg_tag, reg_index, reg_offset}   
                : {reg_tag, reg_index, 4'b0000};     
 assign wr_req = (M_current_state == M_MISS) && (replace_dirty) && ~uncache
-             || (M_current_state == M_MISS) && (reg_op == WRITE)   &&  uncache;
+             || (M_current_state == M_MISS) && (reg_op == WRITE)   &&  uncache
+			 || (cacop_Index_Inv && (cacop_va[0] ? dirty_way1[cacop_va[11:4]] : dirty_way0[cacop_va[11:4]]))
+			 || (cacop_Hit_Inva  && (way0_hit & dirty_way0[reg_index] | way1_hit & dirty_way1[reg_index]));
 assign wr_type = reg_op ? (
                     uncache ? (
                         (reg_wstrb == 4'b1111) ? 3'b010 :
@@ -511,11 +593,19 @@ assign wr_type = reg_op ? (
                         3'b000
                     ) : 3'b100
                 ) : 3'b010;
-assign wr_addr = uncache
-               ? {reg_tag, reg_index, reg_offset}
-               : { (replace_way ? way1_tag : way0_tag), reg_index, 4'b0000 };
+assign wr_addr = cacop_Index_Inv ? {cacop_va[0] ? way1_tag : way0_tag, cacop_va[11:4], 4'b0000} :
+				 cacop_Hit_Inva ? {{20{cache_hit}} & cacop_va_tag,reg_index,4'b0000} :
+				 uncache ? {reg_tag, reg_index, reg_offset}
+               			 : { (replace_way ? way1_tag : way0_tag), reg_index, 4'b0000 };
 assign wr_wstrb = {4{ uncache}} & reg_wstrb
                 | {4{~uncache}} &4'b1111;
-assign wr_data = uncache ? {96'b0, reg_wdata} : replace_data;
+assign wr_data = cacop_Index_Inv ? (cacop_va[0] ? way1_data : way0_data) :
+				 cacop_Hit_Inva ? ( way1_hit ? way1_data : way0_data) :
+				 uncache ? {96'b0, reg_wdata} : replace_data;
+
+assign cacop_ok = cacop_store_tag & (1'b1)
+                 |cacop_Index_Inv & ((cacop_va[0] ? dirty_way1[cacop_va[11:4]] : dirty_way0[cacop_va[11:4]]) & wr_rdy |
+                                           ~(cacop_va[0] ? dirty_way1[cacop_va[11:4]] : dirty_way0[cacop_va[11:4]]))
+                 |cacop_Hit_Inva & (~wr_req | wr_req & wr_rdy);
 
 endmodule

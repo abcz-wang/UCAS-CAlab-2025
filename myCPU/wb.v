@@ -24,7 +24,9 @@ module wb_stage(
     output wire                         WB_refetch_flush,
     // task 19
     output wire                         wb_ex_e,
-    output wire                         WB_exc_fetch
+    output wire                         WB_exc_fetch,
+    // task 23
+    output wire                         exc_now_cacop
 );
 
 reg         WB_valid;
@@ -48,8 +50,12 @@ wire         wb_refetch_flag;
 wire  [ 7:0] WB_exc_tlb;
 wire  [31:0] wb_vaddr;
 
+// task 23
+wire         WB_cacop;
 
-assign {wb_vaddr,
+
+assign {WB_cacop,
+        wb_vaddr,
         WB_exc_tlb,
         MEM_to_WB_tlb_bus,
         WB_gr_we       ,  
@@ -150,6 +156,8 @@ assign {wb_refetch_flag, inst_wb_tlbsrch, inst_wb_tlbrd, inst_wb_tlbwr, inst_wb_
 assign tlbwe = (inst_wb_tlbwr || inst_wb_tlbfill) && WB_valid;
 assign WB_refetch_flush = wb_refetch_flag && WB_valid;
 assign WB_exc_fetch = WB_exc_now[`EXC_ADEF] | WB_exc_tlb[`EARRAY_TLBR_FETCH] | WB_exc_tlb[`EARRAY_PIF] | WB_exc_tlb[`EARRAY_PPI_FETCH];
+
+assign exc_now_cacop = WB_cacop;
 
 // debug info
 assign debug_wb_pc       = WB_pc;
