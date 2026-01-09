@@ -294,7 +294,7 @@ wire EX_has_exc = has_exc | (|EX_exc_now);
 assign data_sram_wr     =   EX_mem_we;
 //基本上是data_sram_en的复用，现在loadstore都是精确异常
 assign EX_to_MEM_req = ((EX_mem_we | EX_res_from_mem) & EX_valid & ~has_ertn & ~exc_ale & ~EX_has_exc);
-assign data_sram_req    = ((EX_mem_we | EX_res_from_mem) & EX_valid & ~has_ertn & ~exc_ale & ~EX_has_exc) & MEM_allow;
+assign data_sram_req    = ((EX_mem_we | EX_res_from_mem) & EX_valid & ~has_ertn & ~exc_ale & ~EX_has_exc);
 // assign data_sram_we    = {4{EX_mem_we && EX_valid && ~EX_has_exc}} & write_strb;x
 assign data_sram_addr  = phy_addr;
 assign data_sram_wdata = EX_is_st_b ? {4{EX_rkd_value[7:0]}} :
