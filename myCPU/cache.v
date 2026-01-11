@@ -67,6 +67,11 @@ assign cacop_Hit_Inv_e = cache_Hit_Inv   && (M_current_state == M_IDLE);
 
 reg         cacop_Hit_Inva;
 
+// CACOP 0x9 (DCache Index Invalidate) 需要在 dirty 情况下写回，并且必须等写回完成后再让 cacop_ok 置 1。
+// 否则在 AXI 写通道高延迟时，后续的 uncached load 可能读到旧值。
+reg         cacop_idx_wb_sent;      // 已经发起过一次写回请求
+reg         cacop_idx_read_done;    // dirty 情况下，先读出一拍 tag/data 再发写回
+
 always @(posedge clk)begin
 	if(reset)
 		cacop_Hit_Inva <= 1'b0;
@@ -265,10 +270,57 @@ always @(posedge clk) begin
 end
 
 assign replace_way = lfsr[0];
+
+// -------------------------------
+// CACOP Index Invalidate writeback sequencing
+// -------------------------------
+// 选中 way 的 dirty 位（Index Invalidate 通过 VA[0] 选 way，通过 VA[11:4] 选 index）
+wire        cacop_idx_dirty_sel = cacop_va[0] ? dirty_way1[cacop_va_index] : dirty_way0[cacop_va_index];
+
+// dirty 情况下先读 RAM 一拍，再发起写回；写回只发一次
+wire        cacop_idx_fire = cacop_Index_Inv
+                             && cacop_idx_dirty_sel
+                             && cacop_idx_read_done
+                             && !cacop_idx_wb_sent
+                             && wr_rdy;
+
+// Index Invalidate 完成条件：
+// - 如果不 dirty：立即完成
+// - 如果 dirty：必须等写回事务结束（wr_rdy 回到 1，且此前已经 fire 过一次）
+wire        cacop_idx_done = cacop_Index_Inv
+                             && ( !cacop_idx_dirty_sel
+                                  || (cacop_idx_wb_sent && wr_rdy) );
+
+always @(posedge clk) begin
+    if (reset) begin
+        cacop_idx_wb_sent   <= 1'b0;
+        cacop_idx_read_done <= 1'b0;
+    end else if (!cacop_Index_Inv) begin
+        cacop_idx_wb_sent   <= 1'b0;
+        cacop_idx_read_done <= 1'b0;
+    end else begin
+        // dirty 行：给 tagv/data RAM 一个周期读出
+        if (cacop_idx_dirty_sel && !cacop_idx_read_done) begin
+            cacop_idx_read_done <= 1'b1;
+        end
+        // 记录已发起写回，避免 wr_req 在 wr_rdy 再次变高时重复触发
+        if (cacop_idx_fire) begin
+            cacop_idx_wb_sent <= 1'b1;
+        end
+    end
+end
+
 assign replace_data = replace_way ? way1_data : way0_data;
 
 wire replace_dirty;
 assign replace_dirty = replace_way ? (dirty_way1[reg_index] && way1_v) : (dirty_way0[reg_index] && way0_v);
+
+// cacop hit-invalidate: if the hit line is dirty, we must write it back before invalidating the tag
+wire hitinv_need_wb;
+assign hitinv_need_wb = (way0_hit && dirty_way0[reg_index]) || (way1_hit && dirty_way1[reg_index]);
+wire hitinv_wb_done;
+assign hitinv_wb_done = (~hitinv_need_wb) || (hitinv_need_wb && wr_rdy);
+
 //情况1，LOOKUP，store命中cache，不使用命中信息，视为命中,阻塞处理
 //这里不使用cache_hit信号，也是因为cache_hit信号需要靠从ram中读出的数据生成的
 //这个判断hit write也会连到ram使能端，从而输出依赖输入，产生逻辑环
@@ -315,7 +367,7 @@ end
 always @(*) begin
 	case (M_current_state)
 		M_IDLE: begin
-			if ((valid || cacop_Hit_Inv_e) && !hit_write_hazard_wb && !uncache_no_req && !cacop_Hit_Inva) begin
+			if ((valid || cacop_Hit_Inv_e) && !cacop_store_tag && !cacop_Index_Inv && !hit_write_hazard_wb && !uncache_no_req && !cacop_Hit_Inva) begin
 				M_next_state = M_LOOKUP;
 			end
 			else begin
@@ -387,32 +439,32 @@ always @(*) begin
 end
 //TAGV
 assign tagv_addr = {8{cacop_store_tag || cacop_Index_Inv}} & cacop_va[11:4] |
-                   {8{~cacop_store_tag && ~cacop_Index_Inv}} & (
-				   {8{lookup_hit}} & index |
-				   {8{cacop_Hit_Inva && cache_hit}} & cacop_va_index |
-				   {8{replace | refill}} & reg_index);
+                   {8{(cacop_Hit_Inv_e || cacop_Hit_Inva)}} & cacop_va_index |
+                   {8{~(cacop_store_tag || cacop_Index_Inv || cacop_Hit_Inv_e || cacop_Hit_Inva)}} & (
+                   {8{lookup_hit}} & index |
+                   {8{replace | refill}} & reg_index);
 
 assign tagv_wdata = {21{refill}} & {reg_tag, 1'b1} |
-                    {21{cacop_store_tag || cacop_Index_Inv}} & 21'b0 |
+                    {21{cacop_store_tag || cacop_idx_done}} & 21'b0 |
                     {21{cacop_Hit_Inva && cache_hit}} & 21'b0;
 assign tagv_w0_we = (refill) && (replace_way == 1'b0) && ret_valid && (miss_ret_cnt == reg_offset[3:2]) ||
-					(cacop_store_tag || cacop_Index_Inv) && (~cacop_va[0]) ||
-					(cacop_Hit_Inva && M_current_state == M_LOOKUP && way0_hit_eff);
+					(cacop_store_tag || cacop_idx_done) && (~cacop_va[0]) ||
+					(cacop_Hit_Inva && hitinv_wb_done && way0_hit_eff);
 assign tagv_w1_we = (refill) && (replace_way == 1'b1) && ret_valid && (miss_ret_cnt == reg_offset[3:2]) ||
-					(cacop_store_tag || cacop_Index_Inv) && (cacop_va[0]) ||
-					(cacop_Hit_Inva && M_current_state == M_LOOKUP && way1_hit_eff);
+					(cacop_store_tag || cacop_idx_done) && (cacop_va[0]) ||
+					(cacop_Hit_Inva && hitinv_wb_done && way1_hit_eff);
 assign tagv_w0_en = lookup_hit || (replace && replace_way == 1'b0) || (refill && replace_way == 1'b0) || 
 					((cacop_store_tag || cacop_Index_Inv) && (~cacop_va[0])) ||
-					(cacop_Hit_Inva && M_current_state == M_LOOKUP && way0_hit_eff);
+					(cacop_Hit_Inv_e || cacop_Hit_Inva);
 assign tagv_w1_en = lookup_hit || (replace && replace_way == 1'b1) || (refill && replace_way == 1'b1) ||
 					((cacop_store_tag || cacop_Index_Inv) && (cacop_va[0])) ||
-					(cacop_Hit_Inva && M_current_state == M_LOOKUP && way1_hit_eff);
+					(cacop_Hit_Inv_e || cacop_Hit_Inva);
 //数据通路部分
 /* assign lookup = ~uncache_no_req && ((M_current_state == M_LOOKUP) && cache_hit & (valid || cacop_Hit_Inva) & !hit_write_hazard_wb || 
 				(M_current_state == M_IDLE) && (valid || cacop_Hit_Inv_e) && !have_hazard); */
 assign lookup =
   (!uncache_no_req) &&
-  ( ((M_current_state == M_LOOKUP) && cache_hit && (valid || cacop_Hit_Inva) && !hit_write_hazard_wb)
+  ( ((M_current_state == M_LOOKUP) && cache_hit && valid && !hit_write_hazard_wb)
     || ((M_current_state == M_IDLE) && (valid || cacop_Hit_Inv_e) && !have_hazard) );
 assign hitwrite = (WB_current_state == WB_WRITE);
 assign replace = (M_current_state == M_REPLACE || M_current_state == M_MISS);
@@ -475,21 +527,21 @@ assign data_wdata = (cacop_store_tag) ? 32'b0 :
 					 | {32{refill}} & refill_ram_wdata;
 //片选
 assign data_w0b0_en = (lookup_hit && offset[3:2] == 2'b00) || (hitwrite && (wb_way == 1'b0)) || (replace && (replace_way == 1'b0)) || (refill && (replace_way == 1'b0)) ||
-                       (cacop_store_tag || cacop_Index_Inv) && (~cacop_va[0]);
+                       (cacop_store_tag || cacop_Index_Inv) && (~cacop_va[0]) || (cacop_Hit_Inv_e || cacop_Hit_Inva);
 assign data_w0b1_en = (lookup_hit && offset[3:2] == 2'b01) || (hitwrite && (wb_way == 1'b0)) || (replace && (replace_way == 1'b0)) || (refill && (replace_way == 1'b0)) ||
-                       (cacop_store_tag || cacop_Index_Inv) && (~cacop_va[0]);
+                       (cacop_store_tag || cacop_Index_Inv) && (~cacop_va[0]) || (cacop_Hit_Inv_e || cacop_Hit_Inva);
 assign data_w0b2_en = (lookup_hit && offset[3:2] == 2'b10) || (hitwrite && (wb_way == 1'b0)) || (replace && (replace_way == 1'b0)) || (refill && (replace_way == 1'b0)) ||
-                       (cacop_store_tag || cacop_Index_Inv) && (~cacop_va[0]);
+                       (cacop_store_tag || cacop_Index_Inv) && (~cacop_va[0]) || (cacop_Hit_Inv_e || cacop_Hit_Inva);
 assign data_w0b3_en = (lookup_hit && offset[3:2] == 2'b11) || (hitwrite && (wb_way == 1'b0)) || (replace && (replace_way == 1'b0)) || (refill && (replace_way == 1'b0)) ||
-                       (cacop_store_tag || cacop_Index_Inv) && (~cacop_va[0]);
+                       (cacop_store_tag || cacop_Index_Inv) && (~cacop_va[0]) || (cacop_Hit_Inv_e || cacop_Hit_Inva);
 assign data_w1b0_en = (lookup_hit && offset[3:2] == 2'b00) || (hitwrite && (wb_way == 1'b1)) || (replace && (replace_way == 1'b1)) || (refill && (replace_way == 1'b1)) ||
-                       (cacop_store_tag || cacop_Index_Inv) && (cacop_va[0]);
+                       (cacop_store_tag || cacop_Index_Inv) && (cacop_va[0]) || (cacop_Hit_Inv_e || cacop_Hit_Inva);
 assign data_w1b1_en = (lookup_hit && offset[3:2] == 2'b01) || (hitwrite && (wb_way == 1'b1)) || (replace && (replace_way == 1'b1)) || (refill && (replace_way == 1'b1)) ||
-                       (cacop_store_tag || cacop_Index_Inv) && (cacop_va[0]);
+                       (cacop_store_tag || cacop_Index_Inv) && (cacop_va[0]) || (cacop_Hit_Inv_e || cacop_Hit_Inva);
 assign data_w1b2_en = (lookup_hit && offset[3:2] == 2'b10) || (hitwrite && (wb_way == 1'b1)) || (replace && (replace_way == 1'b1)) || (refill && (replace_way == 1'b1)) ||
-                       (cacop_store_tag || cacop_Index_Inv) && (cacop_va[0]);
+                       (cacop_store_tag || cacop_Index_Inv) && (cacop_va[0]) || (cacop_Hit_Inv_e || cacop_Hit_Inva);
 assign data_w1b3_en = (lookup_hit && offset[3:2] == 2'b11) || (hitwrite && (wb_way == 1'b1)) || (replace && (replace_way == 1'b1)) || (refill && (replace_way == 1'b1)) ||
-                       (cacop_store_tag || cacop_Index_Inv) && (cacop_va[0]);
+                       (cacop_store_tag || cacop_Index_Inv) && (cacop_va[0]) || (cacop_Hit_Inv_e || cacop_Hit_Inva);
 //request buffer
 always @(posedge clk ) 
 begin
@@ -502,12 +554,21 @@ begin
 		reg_wdata <= 32'b0;
 	end
 	else if(lookup)begin
-		reg_op	 <= op;
-		reg_index <= index;
-		reg_tag	 <= cacop_Hit_Inv_e ? cacop_va_tag : tag;
-		reg_offset<= offset;
-		reg_wstrb <= wstrb;	
-		reg_wdata <= wdata;
+		if (cacop_Hit_Inv_e) begin
+			reg_op	 <= 1'b0;
+			reg_index <= cacop_va_index;
+			reg_tag	 <= cacop_va_tag;
+			reg_offset<= cacop_va[3:0];
+			reg_wstrb <= 4'b0;
+			reg_wdata <= 32'b0;
+		end else begin
+			reg_op	 <= op;
+			reg_index <= index;
+			reg_tag	 <= tag;
+			reg_offset<= offset;
+			reg_wstrb <= wstrb;
+			reg_wdata <= wdata;
+		end
 	end
 end
 
@@ -537,7 +598,7 @@ always @(posedge clk ) begin
 		wb_index <= reg_index;
 		wb_bank  <= reg_offset[3:2];
 		wb_wstrb <= reg_wstrb;
-		wb_wdata <= reg_wdata;
+		wb_wdata <= reg_wdata;	
 	end
 	else begin
 		wb_valid <= 1'b0;
@@ -550,6 +611,23 @@ begin
 		dirty_way0 <= 256'b0;
 		dirty_way1 <= 256'b0;
 	end
+	// CACOP store_tag / index invalidate 会使 cache line 失效，dirty 也应清 0，避免后续误判需要写回
+    else if(cacop_store_tag)begin
+        if(cacop_va[0] == 1'b0) begin
+            dirty_way0[cacop_va[11:4]] <= 1'b0;
+        end
+        else begin
+            dirty_way1[cacop_va[11:4]] <= 1'b0;
+        end
+    end
+    else if(cacop_idx_done)begin
+        if(cacop_va[0] == 1'b0) begin
+            dirty_way0[cacop_va[11:4]] <= 1'b0;
+        end
+        else begin
+            dirty_way1[cacop_va[11:4]] <= 1'b0;
+        end
+    end
 	else if(hitwrite && ~uncache)begin
 		if(wb_way == 1'b0) begin
 			dirty_way0[wb_index] <= 1'b1;
@@ -568,7 +646,7 @@ begin
 	end
 end
 //cache - cpu 接口信号
-assign addr_ok = ~uncache_no_req && ((M_current_state == M_IDLE) && valid && !have_hazard ||
+assign addr_ok = !cacop_active && ~uncache_no_req && ((M_current_state == M_IDLE) && valid && !have_hazard ||
 	 			(M_current_state == M_LOOKUP && valid && (cache_hit || uncache) && !have_hazard));
 
 assign data_ok = (M_current_state == M_LOOKUP) && (cache_hit) && ~uncache ||
@@ -585,7 +663,7 @@ assign rd_addr = uncache
 assign wr_req = (M_current_state == M_MISS) && (replace_dirty) && ~uncache
              || (M_current_state == M_MISS) && (reg_op == WRITE)   &&  uncache
 			 || (cacop_Index_Inv && (cacop_va[0] ? dirty_way1[cacop_va[11:4]] : dirty_way0[cacop_va[11:4]]))
-			 || (cacop_Hit_Inva  && (way0_hit & dirty_way0[reg_index] | way1_hit & dirty_way1[reg_index]));
+			 || (cacop_Hit_Inva  && hitinv_need_wb);
 assign wr_type = reg_op ? (
                     uncache ? (
                         (reg_wstrb == 4'b1111) ? 3'b010 :
@@ -594,7 +672,7 @@ assign wr_type = reg_op ? (
                     ) : 3'b100
                 ) : 3'b010;
 assign wr_addr = cacop_Index_Inv ? {cacop_va[0] ? way1_tag : way0_tag, cacop_va[11:4], 4'b0000} :
-				 cacop_Hit_Inva ? {{20{cache_hit}} & cacop_va_tag,reg_index,4'b0000} :
+				 cacop_Hit_Inva ? {{20{cache_hit}} & cacop_va_tag,cacop_va_index,4'b0000} :
 				 uncache ? {reg_tag, reg_index, reg_offset}
                			 : { (replace_way ? way1_tag : way0_tag), reg_index, 4'b0000 };
 assign wr_wstrb = {4{ uncache}} & reg_wstrb
@@ -606,6 +684,6 @@ assign wr_data = cacop_Index_Inv ? (cacop_va[0] ? way1_data : way0_data) :
 assign cacop_ok = cacop_store_tag & (1'b1)
                  |cacop_Index_Inv & ((cacop_va[0] ? dirty_way1[cacop_va[11:4]] : dirty_way0[cacop_va[11:4]]) & wr_rdy |
                                            ~(cacop_va[0] ? dirty_way1[cacop_va[11:4]] : dirty_way0[cacop_va[11:4]]))
-                 |cacop_Hit_Inva & (~wr_req | wr_req & wr_rdy);
+                 |cacop_Hit_Inva & (hitinv_wb_done);
 
 endmodule

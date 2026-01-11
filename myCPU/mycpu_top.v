@@ -270,10 +270,25 @@ wire [1:0]  data_sram_size;
 wire [3:0]  data_sram_wstrb;
     // output wire       data_sram_en,
 wire[31:0] data_sram_addr;
-wire        data_sram_addr_ok;
-wire        data_sram_data_ok;
-wire[31:0] data_sram_wdata;
-wire[31:0] data_sram_rdata;
+	wire        data_sram_addr_ok;
+	// Break Vivado LUTLP-1 combinational loop: register DCache response (data_ok/rdata)
+	wire        data_sram_data_ok_raw;
+	wire [31:0] data_sram_rdata_raw;
+	reg         data_sram_data_ok;
+	reg  [31:0] data_sram_rdata;
+	wire [31:0] data_sram_wdata;
+
+	always @(posedge aclk) begin
+		if (reset_sync) begin
+			data_sram_data_ok <= 1'b0;
+			data_sram_rdata   <= 32'b0;
+		end else begin
+			data_sram_data_ok <= data_sram_data_ok_raw;
+			if (data_sram_data_ok_raw) begin
+				data_sram_rdata <= data_sram_rdata_raw;
+			end
+		end
+	end
 
 wire [1:0]  csr_crmd_datm;
 wire [1:0]  csr_dmw1_mat;
@@ -730,8 +745,8 @@ cache Dcache(
     .wstrb  (data_sram_wstrb            ),
     .wdata  (data_sram_wdata            ),
     .addr_ok(data_sram_addr_ok          ),
-    .data_ok(data_sram_data_ok          ),
-    .rdata  (data_sram_rdata            ),
+	    .data_ok(data_sram_data_ok_raw      ),
+	    .rdata  (data_sram_rdata_raw        ),
 
     .rd_req (dcache_rd_req              ),
     .rd_type(dcache_rd_type             ),
